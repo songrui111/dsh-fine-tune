@@ -817,7 +817,7 @@ window.__ModuleLoader__.load({
        *
        * The panel cannot know whether the machine has a working Python stack until
        * it asks, and the answer decides whether training is even offerable ? so it
-       * is fetched on mount rather than discovered by pressing ???? and reading
+       * is fetched on mount rather than discovered by pressing 开始训练 and reading
        * the failure.
        */
       const [envState, setEnvState] = React.useState(null)
@@ -926,9 +926,9 @@ window.__ModuleLoader__.load({
             setLastCard(result.dataset)
             setDatasetIds((previous) => (previous.indexOf(result.dataset.id) === -1 ? previous.concat(result.dataset.id) : previous))
           }
-          say(result && result.existing === true ? '?????????????' : '???????????')
+          say(result && result.existing === true ? '示例数据集已经在了，已选中' : '示例数据集已导入并选中')
         } catch (err) {
-          say(`???????${err.message}`)
+          say(`导入示例失败：${err.message}`)
         }
       }
 
@@ -1037,15 +1037,20 @@ window.__ModuleLoader__.load({
         // The install card. Offered only when this host has the route and no ready
         // venv: a user whose environment is already built never sees it, and one who
         // needs it is told what will be downloaded before anything starts.
+        // Offered only when there is genuinely nothing to train with: no venv from
+        // the installer AND no interpreter configured by hand. A user who already
+        // pointed pythonPath at their own stack must not be nagged to install a
+        // second one.
         envState !== null && envState.ready === null
+          && (typeof settings.pythonPath !== 'string' || settings.pythonPath.trim() === '')
           ? h('div', { style: { ...S.banner, borderColor: C.accent } },
-            h('span', null, '???? Python ???torch ??? 3?5 GB?????????? '
-              + (envState.venvPython || '') + ' ???????????'),
+            h('span', null, '训练需要 Python 环境（torch 等，约 3–5 GB）。装一次即可，会装在 '
+              + (envState.venvPython || '插件数据目录下') + ' ，重装插件不用重下。'),
             h('button', {
               style: busy === '' ? S.btnPrimary : { ...S.btnPrimary, ...S.btnDisabled },
               disabled: busy !== '',
               onClick: () => startInstall(false),
-            }, installLog.length === 0 ? '????' : '????'))
+            }, installLog.length === 0 ? '安装环境' : '重新安装'))
           : null,
         // The progress panel. A bar, the current stage and a clock, because the
         // install runs 5 to 20 minutes and a scrolling log gives no sense of whether
@@ -1062,16 +1067,16 @@ window.__ModuleLoader__.load({
             return h('div', { style: S.progressBox },
               h('div', { style: S.progressHead },
                 h('span', { style: S.progressStage },
-                  failed ? '????' : finished ? '????' : (last.stage || last.phase)),
+                  failed ? '安装失败' : finished ? '环境就绪' : (last.stage || last.phase)),
                 h('span', { style: S.progressMeta },
-                  `${percent}%??? ${Math.floor(elapsed / 60000)}:${String(Math.floor((elapsed % 60000) / 1000)).padStart(2, '0')}`)),
+                  `${percent}%　已用 ${Math.floor(elapsed / 60000)}:${String(Math.floor((elapsed % 60000) / 1000)).padStart(2, '0')}`)),
               h('div', { style: S.progressTrack },
                 h('div', { style: { ...S.progressFill, width: `${percent}%`, background: failed ? C.bad : finished ? C.ok : C.accent } })),
               h('div', { style: S.note }, last.message),
               // The full log stays available but collapsed: useful when something
               // goes wrong, noise while it is going right.
               h('details', { style: { marginTop: 4 } },
-                h('summary', { style: S.note }, `?????${installLog.length} ??`),
+                h('summary', { style: S.note }, `详细日志（${installLog.length} 条）`),
                 h('div', { style: { ...S.list, maxHeight: 160, overflowY: 'auto', marginTop: 4 } },
                   installLog.map((event, index) => h('div', {
                     key: `${index}-${event.phase}`,
@@ -1114,12 +1119,12 @@ window.__ModuleLoader__.load({
         // not to be a second way to pick data once the user has their own.
         tab === 'data' && datasets.length === 0
           ? h('div', { style: { ...S.banner, borderColor: C.accent } },
-            h('span', null, '??????????????? 60 ?????????????????????????????????'),
+            h('span', null, '还没有数据集。可以用插件自带的 60 条示例先跑通流程（训练完的模型只认识示例内容，不是给你生产用的）。'),
             h('button', {
               style: busy === '' ? S.btnPrimary : { ...S.btnPrimary, ...S.btnDisabled },
               disabled: busy !== '',
               onClick: loadSample,
-            }, '???????'))
+            }, '导入示例数据集'))
           : null,
 
         tab === 'data' && lastCard !== null ? DataCard(lastCard) : null,

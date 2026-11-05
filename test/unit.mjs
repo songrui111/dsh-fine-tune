@@ -31,7 +31,7 @@ const test = (name, fn) => tests.push({ name, fn });
 // ---------------------------------------------------------------- session.mjs
 test('decodes a zstd frame whose reserved descriptor bit is set', () => {
   // Node's encoder is not available, so build the frame the way the host does:
-  // take a real gzip stream's bytes is useless 鈥?instead synthesise a frame by
+  // take a real gzip stream's bytes is useless —instead synthesise a frame by
   // compressing with zlib's zstd when available, else fall back to asserting the
   // reserved-bit clear on a crafted header.
   const plain = Buffer.from('{"type":"session","id":"s1"}\n{"type":"turn/start","data":{"turn":1}}\n');
@@ -181,7 +181,7 @@ test('the publish gate blocks a regression and passes a tie', () => {
 test('the corrected estimator fails a 1.5B on 6 GB above seq 256', () => {
   // Measured reality (RTX 3060 6 GB, 2026-11-04): a 0.5B at seq 512 peaks at
   // 3.16 GiB, and the cost is dominated by the vocab 脳 seq fp32 logits plus
-  // per-layer activation retention 鈥?not by parameter count. So a 7B is hopeless
+  // per-layer activation retention —not by parameter count. So a 7B is hopeless
   // and even a 1.5B only squeezes in below ~512 tokens.
   const big = estimateMemory({ modelId: 'Qwen/Qwen2.5-7B-Instruct', maxSeqLen: 2048, gpuGiB: 6 });
   assert.equal(big.fits, false);
@@ -201,7 +201,7 @@ test('the corrected estimator fails a 1.5B on 6 GB above seq 256', () => {
 
 test('the estimator reproduces the measured peaks it was calibrated from', () => {
   // Two independent measurements on a real 0.5B run. The estimate must land
-  // within +25% of each 鈥?high enough to absorb the coarse constants, low enough
+  // within +25% of each —high enough to absorb the coarse constants, low enough
   // that a 20脳 miss (the pre-fix bug) can never pass again.
   const measured = { 512: 3.16, 1024: 5.58 };
   for (const [seq, actual] of Object.entries(measured)) {
@@ -212,7 +212,7 @@ test('the estimator reproduces the measured peaks it was calibrated from', () =>
 });
 
 test('logits are a first-class component, not an afterthought', () => {
-  // vocab 脳 seq 脳 4 bytes. For a 152k vocab at seq 1024 that is 0.58 GiB 鈥?the
+  // vocab 脳 seq 脳 4 bytes. For a 152k vocab at seq 1024 that is 0.58 GiB —the
   // term whose absence made the original estimator 20脳 optimistic.
   const at512 = estimateMemory({ modelId: 'Qwen/Qwen2.5-0.5B-Instruct', maxSeqLen: 512 });
   const at1024 = estimateMemory({ modelId: 'Qwen/Qwen2.5-0.5B-Instruct', maxSeqLen: 1024 });
@@ -228,7 +228,7 @@ test('LoRA (fp16 base) costs more than QLoRA on the same model', () => {
   const lora = estimateMemory({ modelId: 'Qwen/Qwen2.5-3B-Instruct', mode: 'lora', maxSeqLen: 2048 });
   assert.ok(lora.components.baseWeights > qlora.components.baseWeights * 2.5, `base weights ${lora.components.baseWeights} vs ${qlora.components.baseWeights}`);
   assert.ok(lora.totalGiB > qlora.totalGiB * 1.05, `lora ${lora.totalGiB} should exceed qlora ${qlora.totalGiB}`);
-  // Neither fits 6 GB at seq 2048 鈥?which is exactly what the calibration showed.
+  // Neither fits 6 GB at seq 2048 —which is exactly what the calibration showed.
   assert.equal(estimateMemory({ modelId: 'Qwen/Qwen2.5-3B-Instruct', mode: 'qlora', maxSeqLen: 2048, gpuGiB: 6 }).fits, false);
   assert.equal(estimateMemory({ modelId: 'Qwen/Qwen2.5-3B-Instruct', mode: 'lora', maxSeqLen: 2048, gpuGiB: 6 }).fits, false);
 });
@@ -315,7 +315,7 @@ test('capabilities gate the advanced knobs instead of hiding them', () => {
   assert.equal(oneCard.hasGpu, true);
   assert.equal(oneCard.features.bf16.ok, true);
   assert.equal(oneCard.features.fp16.ok, true);
-  // Ampere supports FA2, but the wheel is not installed 鈥?the reason says which.
+  // Ampere supports FA2, but the wheel is not installed —the reason says which.
   assert.equal(oneCard.features.flashAttention2.ok, false);
   assert.match(oneCard.features.flashAttention2.why, /flash-attn/);
   // One card: ZeRO has nothing to shard.
@@ -460,7 +460,7 @@ test('spawning is off unless the switch is on', () => {
  * quirk this decoder exists for.
  *
  * Node only exposes zstd compression where the build ships it. When it is absent
- * the helper throws 鈥?and the decoder test above is then skipped with a printed
+ * the helper throws —and the decoder test above is then skipped with a printed
  * reason rather than quietly passing on bytes that are not zstd at all.
  */
 function zstdFrame(bytes, { reserved = false } = {}) {
@@ -583,21 +583,21 @@ test('the text metric separates on-topic from off-topic', () => {
   // four numbers are the reason the metric is trustworthy: it is not a smooth
   // function that scores everything the same, it is 1.0 for right and 0.0 for
   // wrong, which is what the previous "non-empty passes" metric failed to do.
-  const reference = '## ????\n\nWind Power Forecasting. Li et al., Applied Energy 329 (2023) 120291.\n'
-    + '????? FedDRL ??????????????? MAPE ? RMSE ???\n';
+  const reference = '## 选定论文\n\nWind Power Forecasting. Li et al., Applied Energy 329 (2023) 120291.\n'
+    + '我们复现了 FedDRL 方法，使用风电数据集训练，报告 MAPE 与 RMSE 指标。\n';
   assert.equal(scoreTextAnswer(reference, reference).f1, 1);
   // A truncated reference is still entirely on topic.
   assert.ok(scoreTextAnswer(reference.slice(0, Math.floor(reference.length * 0.6)), reference).f1 > 0.9);
   // Fluent text about something else must not score.
-  assert.equal(scoreTextAnswer('?????????????????', reference).f1, 0);
+  assert.equal(scoreTextAnswer('今天天气很好我打算出门散步', reference).f1, 0);
   assert.equal(scoreTextAnswer('', reference).f1, 0);
   assert.equal(scoreTextAnswer('   \n  ', reference).f1, 0);
 });
 
 test('the text metric rewards form as well as content', () => {
-  const reference = '## ??\n\n- ???\n- ???\n\n```json\n{"tool":"read"}\n```\n';
-  const sameWordsWrongForm = '?? ??? ??? read tool';
-  const withForm = '## ??\n\n- ???\n- ???\n\n```json\n{"tool":"read"}\n```\n';
+  const reference = '## 结论\n\n- 第一点\n- 第二点\n\n```json\n{"tool":"read"}\n```\n';
+  const sameWordsWrongForm = '结论 第一点 第二点 read tool';
+  const withForm = '## 结论\n\n- 第一点\n- 第二点\n\n```json\n{"tool":"read"}\n```\n';
   const a = scoreTextAnswer(sameWordsWrongForm, reference);
   const b = scoreTextAnswer(withForm, reference);
   // Same vocabulary, but only one carries the shape SFT is actually teaching.
@@ -606,9 +606,9 @@ test('the text metric rewards form as well as content', () => {
 });
 
 test('the metric is symmetric about padding: extra invented text lowers precision', () => {
-  const reference = '?????????????? MAPE ???';
-  const faithful = '?????????????? MAPE ???';
-  const padded = `${faithful} ???????????????????????????????`;
+  const reference = '模型在风电数据集上训练，报告 MAPE 指标。';
+  const faithful = '模型在风电数据集上训练，报告 MAPE 指标。';
+  const padded = `${faithful} 另外我们还研究了量子计算、烹饪、古典音乐和星象学等等各种内容。`;
   const clean = scoreTextAnswer(faithful, reference);
   const fat = scoreTextAnswer(padded, reference);
   assert.ok(fat.precision < clean.precision, `padding should lower precision: ${fat.precision} vs ${clean.precision}`);
@@ -623,8 +623,8 @@ test('tokenising handles both scripts', () => {
 });
 
 test('the split aggregates keep the per-case detail', () => {
-  const cases = [{ expected: '???????????????' }, { expected: '???????????????' }];
-  const split = scoreTextSplit(cases, ['???????????????', '??????????']);
+  const cases = [{ expected: '答案是一段关于风电预测的说明。' }, { expected: '答案是一段关于风电预测的说明。' }];
+  const split = scoreTextSplit(cases, ['答案是一段关于风电预测的说明。', '完全无关的另一段话。']);
   assert.equal(split.cases, 2);
   assert.equal(split.perCase.length, 2);
   // One of two is on topic: the aggregate must not hide that behind "50%".

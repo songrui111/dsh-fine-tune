@@ -593,17 +593,17 @@ export async function action({ body, settings, paths, store, backends, gpu, inva
       // refused rather than queued.
       if (installing !== null && installing.finished === true) installing = null;
       if (installing !== null) {
-        return { status: 409, body: { ok: false, error: `????????${installing.phase}` } };
+        return { status: 409, body: { ok: false, error: `安装已在进行中：${installing.phase}` } };
       }
       if (body?.confirm !== true) {
-        return { status: 409, body: { ok: false, error: '?????? 3-5 GB ???????? confirm: true' } };
+        return { status: 409, body: { ok: false, error: '安装会下载约 3-5 GB 依赖：确认时请带 confirm: true' } };
       }
       // The install runs in the background and the route returns at once, so the
       // panel can poll `env.status` for progress. Awaiting it here would freeze the
       // browser for five minutes with no feedback ? which is why the earlier version
       // showed nothing until the end.
       const events = [];
-      const job = { phase: 'starting', message: '????', stage: '??', percent: 0, elapsedMs: 0 };
+      const job = { phase: 'starting', message: '准备中…', stage: '准备', percent: 0, elapsedMs: 0 };
       installing = { ...job, events };
       const runInstall = install({
         root,
@@ -655,7 +655,7 @@ export async function action({ body, settings, paths, store, backends, gpu, inva
       // click does not create `sample-2`, `sample-3`.
       const sampleFile = join(dirname(fileURLToPath(import.meta.url)), 'sample', 'sample.jsonl');
       if (!existsSync(sampleFile)) {
-        return { status: 404, body: { ok: false, error: `???????????${sampleFile}` } };
+        return { status: 404, body: { ok: false, error: `插件里没有示例数据集：${sampleFile}` } };
       }
       const datasetId = 'sample';
       if (existsSync(join(paths.datasets, datasetId, 'manifest.json'))) {
@@ -666,7 +666,7 @@ export async function action({ body, settings, paths, store, backends, gpu, inva
         source: {
           id: 'sample',
           kind: 'dataset',
-          label: '??????60 ????????',
+          label: '示例数据集（60 条，验证流程用）',
           file: sampleFile,
           format: 'auto',
           redaction: 'path',
@@ -823,15 +823,15 @@ export async function action({ body, settings, paths, store, backends, gpu, inva
       // leave it writing into a path that no longer exists. Cancel first, then
       // delete ? two deliberate steps for one destructive action.
       if (body?.confirm !== true) {
-        return { status: 409, body: { ok: false, error: '???????????????? confirm: true' } };
+        return { status: 409, body: { ok: false, error: '删除训练任务不可恢复：确认时请带 confirm: true' } };
       }
       const id = String(body?.id ?? '');
-      if (!/^[a-z]+-\d{14}-[a-z0-9]{6}$/.test(id)) return { status: 400, body: { ok: false, error: '?? id ???' } };
+      if (!/^[a-z]+-\d{14}-[a-z0-9]{6}$/.test(id)) return { status: 400, body: { ok: false, error: '任务 id 不合法' } };
       // Disk is the source of truth, not the in-memory map: a run created before
       // this process started (or one whose record failed to parse) is still a
       // directory a user may want gone. The map only adds the "is it live" check.
       const runFile = join(paths.runs, id, 'run.json');
-      if (!existsSync(runFile)) return { status: 404, body: { ok: false, error: `??????${id}` } };
+      if (!existsSync(runFile)) return { status: 404, body: { ok: false, error: `任务不存在：${id}` } };
       const inMemory = store.job(id);
       let state = null;
       try {
@@ -839,7 +839,7 @@ export async function action({ body, settings, paths, store, backends, gpu, inva
       } catch { /* an unreadable record is still deletable */ }
       if (inMemory !== null) state = inMemory.record.state;
       if (state === 'running' || state === 'queued') {
-        return { status: 409, body: { ok: false, error: '?????????????' } };
+        return { status: 409, body: { ok: false, error: '任务还在跑：先取消，再删除' } };
       }
       // The run record lives in runs/<id>; the worker's output in outputs/<id>.
       // Both go, or the next mount restores a run whose data is half gone.
@@ -878,7 +878,7 @@ export async function action({ body, settings, paths, store, backends, gpu, inva
       // confirmation and sends `confirm: true`. Without it the route refuses,
       // which stops a stray click (or a retried request) from removing data.
       if (body?.confirm !== true) {
-        return { status: 409, body: { ok: false, error: '??????????????? confirm: true' } };
+        return { status: 409, body: { ok: false, error: '删除数据集不可恢复：确认时请带 confirm: true' } };
       }
       const removed = deleteDataset(root, body?.datasetId);
       if (removed.ok !== true) return { status: 400, body: { ok: false, error: removed.error } };
