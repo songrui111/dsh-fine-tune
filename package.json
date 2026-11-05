@@ -1,7 +1,7 @@
 {
   "name": "dsh-fine-tune",
   "version": "0.1.0",
-  "description": "Fine-tuning bench for DSH: mine (scenario → right action) samples from real session logs or external datasets, audit and dedupe them, run QLoRA on a local GPU or a remote SSH host, then A/B the result against the base model before anything is published. · 面向 DSH 的微调工作台：从真实会话日志或外部数据集抽「情景→应做动作」样本，审数据、去重，本地或远端 GPU 跑 QLoRA，先 A/B 对比再发布。",
+  "description": "Local LoRA / QLoRA fine-tuning for DeepSeek Harness: import JSONL, train on your own GPU (or a remote SSH host), evaluate, and export an adapter. One-click environment install; Windows + NVIDIA verified. 本地微调插件：数据集→训练→评测，支持本机与远程 GPU。",
   "type": "module",
   "main": "index.js",
   "author": "songrui",
