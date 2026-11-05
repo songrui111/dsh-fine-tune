@@ -24,14 +24,13 @@
 set -euo pipefail
 
 MODEL="${MODEL:-Qwen/Qwen2.5-0.5B-Instruct}"
-CHECK_ONLY=0
 INSTALL=1
 VENV_DIR="${VENV_DIR:-$HOME/.dsh-fine-tune/venv}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --check) CHECK_ONLY=1; INSTALL=0 ;;
+    --check) INSTALL=0 ;;
     --no-install) INSTALL=0 ;;
     --model) shift; MODEL="${1:-$MODEL}" ;;
     --venv) shift; VENV_DIR="${1:-$VENV_DIR}" ;;

@@ -7,7 +7,13 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { zstdCompressSync, constants } from 'node:zlib';
+// Lazy, not a top-level `import { zstdCompressSync }`: that makes the whole test
+// file unloadable on Node < 22.15, which is exactly the Node the CI matrix runs.
+// The zstd tests then skip with a printed reason instead of the suite failing to
+// start - a missing capability and a broken decoder are different things.
+const zlib = await import('node:zlib');
+const zstdCompressSync = typeof zlib.zstdCompressSync === 'function' ? zlib.zstdCompressSync : null;
+const constants = zlib.constants;
 
 import { decodeSessionFile } from '../lib/session.mjs';
 import { redactText } from '../lib/redact.mjs';
