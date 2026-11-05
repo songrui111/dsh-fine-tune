@@ -31,8 +31,13 @@ jobs:
       # The worker is deliberately import-clean without torch: protocol tests must
       # run on a machine that has no ML stack, which is also the guarantee that
       # `--help` and config validation work before anything is installed.
+      # Run from python/ so `fnt_worker` is importable. `discover -s python/tests`
+      # from the repo root puts python/tests on sys.path, not python/, and every
+      # test module that imports fnt_worker then fails with ModuleNotFoundError --
+      # which is how this job has been failing, not because of the protocol.
       - name: worker protocol
-        run: python -m unittest discover -s python/tests
+        working-directory: python
+        run: python -m unittest discover -s tests
 
   transport:
     # The SSH/SFTP tests start a throwaway server, so they need the Python deps
