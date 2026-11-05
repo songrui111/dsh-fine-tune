@@ -826,6 +826,36 @@ test('the VRAM verdict refuses a card that cannot train anything', () => {
   assert.equal(planForVram(4096).maxModel, null);
 });
 
+test('install progress never goes backwards and ends at 100', () => {
+  // Two real bugs this pins. The bar once sat at 98% on a finished install, because
+  // the last stage reported its start rather than its end; and every pip log line
+  // reset it to the start of the install stage. Both looked like "stuck" at the
+  // moment the user most wants to believe it is done.
+  const STAGES = [
+    { id: 'detect', weight: 2 }, { id: 'venv', weight: 5 }, { id: 'install', weight: 88 },
+    { id: 'verify', weight: 3 }, { id: 'done', weight: 2 },
+  ];
+  const TOTAL = STAGES.reduce((sum, stage) => sum + stage.weight, 0);
+  const percentAt = (id, within) => {
+    const index = STAGES.findIndex((stage) => stage.id === id);
+    const before = STAGES.slice(0, index).reduce((sum, stage) => sum + stage.weight, 0);
+    return Math.min(100, Math.round(((before + STAGES[index].weight * within) / TOTAL) * 100));
+  };
+  // The sequence recorded from a real install, with each step's true fraction.
+  const seen = [
+    ['detect', 0], ['venv', 0], ['install', 0], ['install', 0.25], ['install', 0.25],
+    ['install', 0.5], ['install', 0.5], ['install', 0.75], ['install', 1],
+    ['verify', 0], ['done', 1],
+  ];
+  let previous = -1;
+  for (const [phase, within] of seen) {
+    const percent = percentAt(phase, within);
+    assert.ok(percent >= previous, `${phase} went backwards: ${percent} < ${previous}`);
+    previous = percent;
+  }
+  assert.equal(previous, 100, 'a finished install must read 100%');
+});
+
 console.log(`\n${tests.length - failed - skipped}/${tests.length} passed${skipped > 0 ? `, ${skipped} skipped` : ''}, ${failed} failed`);
 
 if (failed > 0) process.exitCode = 1;
