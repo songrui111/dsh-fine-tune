@@ -521,6 +521,15 @@ function collectRemoteArtifacts({ store, id, target, remoteRun, localOut, sshExe
  */
 let installing = null;
 
+/** Read one dataset's manifest, or null. */
+function loadDatasetManifest(datasetsRoot, id) {
+  try {
+    return JSON.parse(readFileSync(join(datasetsRoot, id, 'manifest.json'), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
 export async function action({ body, settings, paths, store, backends, gpu, invalidateGpu }) {
   const op = String(body?.op ?? '');
   const root = paths.root;
@@ -625,6 +634,37 @@ export async function action({ body, settings, paths, store, backends, gpu, inva
       if (validated.error !== undefined) return { status: 400, body: { ok: false, error: validated.error } };
       if (loadSource(root, validated.value.id) !== null) return { status: 409, body: { ok: false, error: `数据源 ${validated.value.id} 已存在` } };
       return { body: { ok: true, source: saveSource(root, validated.value) } };
+    }
+    case 'dataset.sample': {
+      // Builds a dataset from the sample shipped with the plugin. A fresh install
+      // has no data at all, and "find some JSONL first" is the step where a new
+      // user stops ? this makes the pipeline runnable before they bring anything.
+      //
+      // Rebuilding is refused, not an error: the button is idempotent so a double
+      // click does not create `sample-2`, `sample-3`.
+      const sampleFile = join(dirname(fileURLToPath(import.meta.url)), 'sample', 'sample.jsonl');
+      if (!existsSync(sampleFile)) {
+        return { status: 404, body: { ok: false, error: `???????????${sampleFile}` } };
+      }
+      const datasetId = 'sample';
+      if (existsSync(join(paths.datasets, datasetId, 'manifest.json'))) {
+        return { body: { ok: true, dataset: loadDatasetManifest(paths.datasets, datasetId), existing: true } };
+      }
+      const built = buildDataset({
+        root,
+        source: {
+          id: 'sample',
+          kind: 'dataset',
+          label: '??????60 ????????',
+          file: sampleFile,
+          format: 'auto',
+          redaction: 'path',
+          mode: 'answer',
+          createdAt: Date.now(),
+        },
+        datasetId,
+      });
+      return { body: { ok: true, dataset: built.manifest } };
     }
     case 'dataset.build': {
       const source = loadSource(root, String(body?.sourceId ?? ''));

@@ -886,6 +886,20 @@ window.__ModuleLoader__.load({
         }
       }
 
+      /** One click to a runnable dataset on a fresh install. */
+      const loadSample = async () => {
+        try {
+          const result = await postAction({ op: 'dataset.sample' })
+          if (result && result.dataset) {
+            setLastCard(result.dataset)
+            setDatasetIds((previous) => (previous.indexOf(result.dataset.id) === -1 ? previous.concat(result.dataset.id) : previous))
+          }
+          say(result && result.existing === true ? '?????????????' : '???????????')
+        } catch (err) {
+          say(`???????${err.message}`)
+        }
+      }
+
       const buildFromFile = async () => {
         try {
           const sourceId = `file-${Date.now().toString(36)}`
@@ -1038,6 +1052,18 @@ window.__ModuleLoader__.load({
                 disabled: datasetFile === '' || busy !== '',
                 onClick: buildFromFile,
               }, '导入')))
+          : null,
+
+        // Only when the list is empty: the point is to get a new install running,
+        // not to be a second way to pick data once the user has their own.
+        tab === 'data' && datasets.length === 0
+          ? h('div', { style: { ...S.banner, borderColor: C.accent } },
+            h('span', null, '??????????????? 60 ?????????????????????????????????'),
+            h('button', {
+              style: busy === '' ? S.btnPrimary : { ...S.btnPrimary, ...S.btnDisabled },
+              disabled: busy !== '',
+              onClick: loadSample,
+            }, '???????'))
           : null,
 
         tab === 'data' && lastCard !== null ? DataCard(lastCard) : null,
