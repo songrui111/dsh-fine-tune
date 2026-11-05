@@ -1,76 +1,188 @@
-# dsh-fine-tune · a fine-tuning bench for DSH
+# dsh-fine-tune
 
-**A fine-tuning pipeline for DSH: mine (scenario → right action) samples from real session logs, audit and dedupe them, run QLoRA on a local or remote GPU, then A/B the result against the base model before anything is published.**
+**在 DeepSeek Harness 里微调一个小模型，跑在你自己的显卡上。**
 
-[中文](README.zh-CN.md) · MIT · [Design](DESIGN.md) · [M0 lab](M0-LAB.md)
+导入数据 → 训练 → 评测，全在一个面板里完成。产物是一个 LoRA 适配器，几十 MB。
 
-## Why
+---
 
-Training scripts are not the scarce thing. The chain around them is: what to train on, whether the data is clean, and whether the result is actually better.
+## 它能做什么，不能做什么
 
-1. **What to train on** — a DSH session log is already a corpus of `(situation → right action)`, mixed with failed retries, invented tool names and private data.
-2. **Whether it is clean** — a dataset gets uploaded and baked into weights; redaction and dedupe have to happen *before* training, with evidence (a data card).
-3. **Whether it is better** — "is this answer good" is not decidable, but "is the tool name right, are the arguments right, was a tool invented" is. A regression blocks publishing.
+**能做**
 
-## What you get
+- 用 QLoRA / LoRA 在本地或远程 GPU 上训练 Qwen / Llama 系的开源模型
+- 从 JSONL 导入数据，训练前看到数据卡（样本数、token 分布、去重结果）
+- 训练前估算显存，放不下就不启动 —— 不用跑到一半 OOM
+- 评测并给出可判定的数字（工具调用准确率）和文本相似度
+- 导出 adapter、合并权重、导出 GGUF 给 Ollama
 
-One sidebar seat, five model-facing tools, laid out as data → train → evaluate.
+**不能做**
 
-| Entry | For |
+- **微调不了你正在聊天的那个云端模型。** 它跑在别人的服务器上，你没有它的权重。这个插件训练的是**下载到你本机的开源小模型**。
+- macOS 没有 CUDA，训练不可行。
+- 显存不够训大模型 —— 这是物理限制，不是配置问题。
+
+---
+
+## 要求
+
+| 项 | 要求 |
 |---|---|
-| `train_prepare` | Mine sessions or a local JSONL into a dataset + data card (kept / deduped / every drop reason / redaction counts / token spread) |
-| `train_check` | Will it fit here? GPU, component-by-component memory estimate, the smallest change that makes it fit |
-| `train_run` | Start QLoRA — refuses before spawning when the estimate does not fit |
-| `train_status` | State, loss, artifacts, evaluation verdict |
-| `train_eval` | How this run is judged, and what the last verdict was |
-| **Panel** | Session picking, data card, memory gauge, live loss curve, runs, verdict, publish prep |
+| 系统 | **Windows 10/11**（Linux 未验证，见下） |
+| 显卡 | **NVIDIA，6 GB 显存起** |
+| 驱动 | 支持 CUDA 11.8 以上 |
+| Python | 3.10+（用来建虚拟环境） |
+| 磁盘 | 约 10 GB（依赖 3-5 GB + 模型 1 GB + 数据） |
 
-## Install
+显存对应的能力，按实测：
 
-```sh
-dsh plugin --profile desktop add file:C:/path/to/fine-tune
+| 显存 | 能训 |
+|---|---|
+| 6 GB | 0.5B（QLoRA, seq ≤ 1024），显存峰值 2.86 GiB |
+| 8 GB | 1.5B |
+| 12 GB | 3B |
+| 24 GB | 7B |
+
+---
+
+## 安装
+
+1. 在插件市场安装本插件
+2. 打开面板 → 顶部会提示「训练需要 Python 环境」，点**安装环境**
+3. 等待 10-20 分钟（下载 torch 等约 3-5 GB）
+4. 装完会验证 GPU 真的能跑矩阵乘法，不只是能 import
+
+环境装在 `$DSH_HOME/fine-tune/venv`，**重装插件不用重下**。
+
+### 安装失败怎么办
+
+| 报错 | 原因 |
+|---|---|
+| `nvidia-smi 不可用` | 没有 N 卡，或驱动没装 |
+| `没有匹配的 torch 轮子` | 驱动太旧，升级驱动 |
+| `显存不足` | 4 GB 以下训练不可行（装完也训不动，所以不下载） |
+| `找不到 Python 3.10+` | 装 Python 并勾选 Add to PATH |
+
+---
+
+## 用法
+
+### 1. 准备数据
+
+JSONL，每行一个对话：
+
+```jsonl
+{"messages":[{"role":"user","content":"问题"},{"role":"assistant","content":"答案"}]}
 ```
 
-Restart the profile. **Read-only by default**: browsing data and probing the GPU work; training and publishing need their switches.
+或简写：
 
-## Switches
-
-| Switch | Default | Opens |
-|---|---|---|
-| `allowSpawn` | off | Starting training, probing Python |
-| `allowPublish` | off | Publish prep, and only with a green verdict plus a `.gguf` |
-| `allowRemotePanel` | off | Serving the panel beyond loopback |
-
-## Config
-
-```yaml
-- id: fine-tune
-  config:
-    pythonPath: C:\\path\\to\\venv\\Scripts\\python.exe
-    workerRoot: C:\\path\\to\\fine-tune\\python   # default: the bundled python/
-    dataDir: ""                                  # default: ~/.dsh/fine-tune
-    allowSpawn: false
-    allowPublish: false
-    nvidiaSmi: nvidia-smi
-    sshTarget: ""                                # M4: remote training
+```jsonl
+{"prompt":"问题","response":"答案"}
 ```
 
-## Honest notes
+**建议 100 条以上。** 少于 20 条，训出来的差别大概率在噪声里。
 
-- **Whether a fine-tune actually helps is unverified until M0 is run.** On a 6 GB card: 1.5B is comfortable, 4B is worth trying, 7B is refused. See [M0-LAB.md](M0-LAB.md).
-- Adherence is a **mechanical check** (tool name / arguments / format), not a taste score.
-- The **remote SSH backend's execution hook is not wired** to the host yet; only the local backend runs. See [DESIGN.md](DESIGN.md) §10.
-- Session decoding depends on clearing one reserved bit in the first zstd frame. A log that cannot be decoded says so, and is never counted as an empty session.
+仓库里带了一个 `sample/sample.jsonl`（60 条），装完可以先用它验证流程。
 
-## Develop
+### 2. 训练
 
-```sh
-npm test                                              # 31 unit + route-level host + client bundle
-cd python && python -m unittest discover -s tests      # worker protocol (8)
+「数据」页勾选数据集 → 「下一步」→ 选模型和序列长度 → 「开始训练」
+
+**关键参数**（其余默认）：
+
+| 参数 | 6 GB 显卡的值 |
+|---|---|
+| 模型 | `Qwen2.5-0.5B-Instruct` |
+| 训练方式 | QLoRA |
+| 序列长度 | 1024 |
+
+看显存预估框是绿色再点开始。
+
+### 3. 评测
+
+「评测与发布」页，跑 20 条，看**工具准确率**。
+
+---
+
+## 实测数据（RTX 3060 Laptop 6 GB）
+
+在 1614 条工具调用样本上训练 Qwen2.5-0.5B：
+
+| 项 | 结果 |
+|---|---|
+| 耗时 | 18.3 分钟（190 步） |
+| 显存峰值 | **2.86 GiB** |
+| loss | **1.49 → 0.68** |
+| **工具调用准确率** | **0% → 10%** |
+| 文本相似度 F1 | 0.005 → 0.271 |
+| 沾题率 | 0% → 90% |
+
+底座 0% 是正常的：0.5B 原本不会输出那个 JSON 结构。
+
+**10% 是 0.5B 的真实水平**，不是训练没做好。要更高准确率只能换更大模型，需要更大显存。
+
+### 一个踩过的坑
+
+把数据集的上下文压缩掉之后（为了塞进更短的序列），train_loss 卡在 1.61 不降，**完全学不到东西**。原版数据能降到 0.68。
+
+**提示里的历史上下文是决策依据，不是冗余。** 不要为了省显存去裁剪它 —— 用更大的序列长度，或者接受截断。
+
+---
+
+## 已知限制
+
+**已验证**
+
+- Windows 11 + RTX 3060 6 GB
+- torch 2.5.1+cu121 / transformers 4.46.3 / peft 0.13.2 / bitsandbytes 0.44.1
+- 本机训练、评测、导出完整链路
+
+**未验证 —— 出问题请开 issue**
+
+| 项 | 状态 |
+|---|---|
+| Linux | 代码写了，**一次都没跑过** |
+| 其他显卡型号 | 只在这块 3060 上测过 |
+| 远程 SSH 后端 | 有端到端测试（11/11 通过），但用的是模拟 SSH 服务器，**没连过真实远程 GPU** |
+| CUDA 11.8 轮子 | 驱动太旧时会选它，但没测过 |
+| 多卡 | 不支持 |
+
+---
+
+## 架构
+
+```
+index.js            宿主：路由、权限门、训练进程管理
+client/client.js    面板（浏览器）
+lib/
+  hardware.mjs      显存估算（含实测标定）
+  training.mjs      参数校验与能力探测
+  bootstrap.mjs     CUDA 轮子选择、显卡解析
+  install.mjs       安装流程
+  backend.mjs       本机 / SSH 后端
+  dataset.mjs       数据集读写、切分、合并
+python/fnt_worker/  Python worker：训练、评测、导出
 ```
 
-No build step, no runtime dependencies.
+**为什么用 venv 而不是打包依赖**：torch 的版本取决于用户的显卡，3-5 GB 的包也远超插件该有的体积。装错版本比不装更难排查。
 
-## License
+---
+
+## 开发
+
+```powershell
+node test/unit.mjs      # 55 个单元测试
+node test/host.mjs      # 宿主接口
+node test/client.mjs    # 面板 bundle
+cd python; python -m unittest discover -s tests   # 20 个
+node test/ssh-e2e.mjs   # SSH 传输（11 项）
+```
+
+`scripts/sync.mjs` 把代码复制到 DSH profile，文件清单是**扫描目录得到的**，不是手写的。
+
+---
+
+## 许可
 
 MIT

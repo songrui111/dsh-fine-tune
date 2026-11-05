@@ -35,31 +35,49 @@ const profile = profileFlag !== -1 && argv[profileFlag + 1] ? argv[profileFlag +
 const dshHome = process.env.DSH_HOME || join(homedir(), '.dsh');
 const target = join(dshHome, 'profiles', profile, 'node_modules', 'dsh-fine-tune');
 
-/** Everything the plugin needs at runtime. Tests and docs do not need copying. */
-const FILES = [
-  'index.js',
-  'package.json',
-  'cordis.patch.yml',
-  'client/client.js',
-  'lib/backend.mjs',
-  'lib/dataset.mjs',
-  'lib/evaluate.mjs',
-  'lib/hardware.mjs',
-  'lib/jobs.mjs',
-  'lib/pack.mjs',
-  'lib/redact.mjs',
-  'lib/session.mjs',
-  'lib/sources.mjs',
-  'lib/ssh.mjs',
-  'lib/tools.mjs',
-  'lib/transfer.mjs',
-  'lib/training.mjs',
-  'lib/textmetric.mjs',
-  'python/fnt_worker/__init__.py',
-  'python/fnt_worker/__main__.py',
-  'python/fnt_worker/calibrate.py',
-  'python/fnt_worker/textmetric.py',
-];
+/**
+ * Everything the plugin needs at runtime, **discovered**, not listed.
+ *
+ * This used to be a hand-written array, and it went stale three times: a new
+ * `lib/*.mjs` shipped in the source and never reached the profile, so the plugin
+ * failed to import and the panel was blank. Nothing in a hand-written list can
+ * catch the file you forgot to add to it. So the list is derived:
+ *
+ *   - the entry files by name (`index.js`, `package.json`, `cordis.patch.yml`)
+ *   - every `.mjs` under `lib/`
+ *   - the browser bundle
+ *   - every `.py` under `python/fnt_worker/`
+ *
+ * Anything else (tests, docs, docs-only fixtures, the venv) is deliberately out.
+ */
+function discoverFiles() {
+  const files = ['index.js', 'package.json', 'cordis.patch.yml', 'client/client.js',
+    // The bundled sample dataset: a fresh install has no data, so the panel
+    // offers this one to prove the pipeline works before the user brings their own.
+    'sample/sample.jsonl'];
+  const walk = (dir) => {
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const rel = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) {
+        if (entry.name === '__pycache__') continue;
+        walk(rel);
+        continue;
+      }
+      if (entry.name.endsWith('.mjs') || entry.name.endsWith('.py')) files.push(rel);
+    }
+  };
+  walk('lib');
+  walk('python/fnt_worker');
+  return files.sort();
+}
+
+const FILES = discoverFiles();
 
 /** A file whose bytes already match does not need writing (and avoids a busy lock). */
 function identical(from, to) {

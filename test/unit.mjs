@@ -760,6 +760,72 @@ test('every colour token the panel uses is defined', () => {
   assert.deepEqual(missing, [], `undefined colour tokens: ${missing.join(', ')}`);
 });
 
+test('deleting a dataset refuses anything that is not one', () => {
+  // The id is joined onto the datasets root, and the delete is irreversible, so
+  // every guard gets its own assertion: a bad id must not reach the filesystem, a
+  // path must not escape the datasets directory, and a plan directory must not be
+  // mistaken for data.
+  const root = join(tmpdir(), 'fnt-del-' + process.pid);
+  mkdirSync(join(root, 'datasets', 'real'), { recursive: true });
+  writeFileSync(join(root, 'datasets', 'real', 'manifest.json'), '{"id":"real"}', 'utf8');
+  // A directory with no manifest is not a dataset and must survive.
+  mkdirSync(join(root, 'datasets', 'no-manifest'), { recursive: true });
+
+  assert.equal(deleteDataset(root, '../datasets/real').ok, false, 'a separator must be refused');
+  assert.equal(deleteDataset(root, '..').ok, false);
+  assert.equal(deleteDataset(root, '').ok, false);
+  assert.equal(deleteDataset(root, 'no-manifest').ok, false, 'no manifest means not ours to delete');
+  assert.ok(existsSync(join(root, 'datasets', 'no-manifest')), 'the stray directory must survive');
+
+  const removed = deleteDataset(root, 'real');
+  assert.equal(removed.ok, true);
+  assert.equal(existsSync(join(root, 'datasets', 'real')), false, 'the dataset directory must be gone');
+  assert.equal(deleteDataset(root, 'real').ok, false, 'deleting twice must fail, not throw');
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('the installer picks a CUDA wheel the driver can actually load', () => {
+  // Two failure modes this guards. A wheel newer than the driver fails with
+  // "CUDA driver version is insufficient"; and a wheel older than necessary is a
+  // regression against the build the whole training loop was measured on.
+  const cu121 = pickCuda('12.1');
+  assert.equal(cu121.cuda, '121');
+  // A new driver still gets the validated build: CUDA is forward compatible.
+  assert.equal(pickCuda('13.1').cuda, '121', 'a 13.1 driver should keep the validated build');
+  assert.equal(pickCuda('12.8').cuda, '121');
+  // Only a driver too old for cu121 drops down, and that is flagged as unvalidated.
+  const old = pickCuda('11.8');
+  assert.equal(old.cuda, '118');
+  assert.equal(old.unvalidated, true, 'a wheel that was never tested must say so');
+  // Too old for anything. Refusing is better than installing a wheel that cannot load.
+  assert.equal(pickCuda('11.2'), null);
+  assert.equal(pickCuda(''), null);
+  assert.equal(pickCuda(null), null);
+});
+
+test('GPU parsing keeps the memory unit out of the number', () => {
+  // `Number("6144 MiB")` is NaN, which once made the panel report "no GPU" on a
+  // machine that had one. The unit must be parsed, not stripped and hoped for.
+  const gpu = parseGpuListing('NVIDIA GeForce RTX 3060 Laptop GPU, 6144 MiB, 552.44');
+  assert.equal(gpu.name, 'NVIDIA GeForce RTX 3060 Laptop GPU');
+  assert.equal(gpu.totalMiB, 6144);
+  const multi = parseGpuListing('Small, 4096 MiB, 1\nBig, 24576 MiB, 1');
+  assert.equal(multi.totalMiB, 24576, 'the largest card is the one training targets');
+  assert.equal(parseGpuListing('NVIDIA RTX 4090, 24 GiB, 1').totalMiB, 24576);
+  assert.equal(parseGpuListing('no unit here, 6144, 1'), null);
+  assert.equal(parseGpuListing(''), null);
+});
+
+test('the VRAM verdict refuses a card that cannot train anything', () => {
+  assert.equal(planForVram(4096).verdict, 'insufficient');
+  assert.equal(planForVram(6144).verdict, 'minimal');
+  assert.equal(planForVram(8192).verdict, 'workable');
+  assert.equal(planForVram(24576).verdict, 'comfortable');
+  // A card judged insufficient must not name a model: "you can train X" followed by
+  // an OOM is worse than saying it will not fit.
+  assert.equal(planForVram(4096).maxModel, null);
+});
+
 console.log(`\n${tests.length - failed - skipped}/${tests.length} passed${skipped > 0 ? `, ${skipped} skipped` : ''}, ${failed} failed`);
 
 if (failed > 0) process.exitCode = 1;

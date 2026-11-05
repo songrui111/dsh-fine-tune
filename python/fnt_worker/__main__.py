@@ -27,6 +27,7 @@ import argparse
 import json
 import os
 import sys
+import tempfile
 import time
 import traceback
 from types import SimpleNamespace
@@ -238,7 +239,7 @@ def deepspeed_plan(config: dict[str, Any], out_dir: str) -> str | None:
 
     zero = {"zero2": 2, "zero3": 3}[stage]
     path = os.path.join(out_dir, f"deepspeed_zero{zero}.json")
-    os.makedirs(out_dir, exist_ok=True)
+    _ensure_dir(out_dir)
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(
             {
@@ -290,6 +291,19 @@ def cmd_train(config: dict[str, Any]) -> None:
             TrainingArguments,
         )
     except Exception as error:  # noqa: BLE001 - the message is the product here
+        # Importing torch can fail for reasons that are not a missing package:
+        # "No usable temporary directory found" comes from tempfile while torch's
+        # own import machinery touches disk, and reporting it as a missing
+        # dependency sends the user to reinstall a package that is already there.
+        name = type(error).__name__
+        text = str(error)
+        if "temporary directory" in text.lower() or name in ("FileNotFoundError", "PermissionError"):
+            die(
+                "env",
+                f"训练环境不可用：{name}: {text}。"
+                "这是临时目录/文件权限问题，不是缺少依赖 —— torch 已经装好了。"
+                "检查 TEMP 指向的目录是否可写，或用 TMPDIR 指定一个空目录后重试。",
+            )
         die(
             "deps",
             f"训练依赖不完整：{error}。装好 torch / transformers / peft / datasets / bitsandbytes 后重试。",
@@ -362,7 +376,7 @@ def cmd_train(config: dict[str, Any]) -> None:
 
     if dry_run:
         emit(kind="artifact", label="plan", path=os.path.join(out_dir, "plan.json"))
-        os.makedirs(out_dir, exist_ok=True)
+        _ensure_dir(out_dir)
         with open(os.path.join(out_dir, "plan.json"), "w", encoding="utf-8") as handle:
             json.dump(
                 {
@@ -381,7 +395,7 @@ def cmd_train(config: dict[str, Any]) -> None:
         log("试运行：依赖齐全、数据可解析、LoRA 已挂上；没有开始训练。")
         return
 
-    os.makedirs(out_dir, exist_ok=True)
+    _ensure_dir(out_dir)
 
     def on_log(args) -> None:
         """Bridge the Trainer's own logging to protocol events."""
@@ -415,8 +429,13 @@ def cmd_train(config: dict[str, Any]) -> None:
         adam_beta2=float(config.get("adamBeta2", 0.999)),
         max_grad_norm=float(config.get("maxGradNorm", 1)),
         logging_steps=int(config.get("loggingSteps", 5)),
-        save_strategy="epoch",
-        save_total_limit=1,
+        # No intermediate checkpoints. The adapter saved at the end of the run is the
+        # only artifact anyone uses, and each checkpoint costs a directory *plus* a
+        # full copy of the adapter. On a machine where a security product blocks
+        # Python from creating directories, the first checkpoint is also the first
+        # hard failure ? two good reasons to not write them.
+        save_strategy="no",
+        save_total_limit=None,
         eval_strategy="epoch" if val_ds is not None else "no",
         # Validation is a forward pass over the whole split; without its own batch
         # size it materialises every val sample at once and OOMs *after* a
@@ -428,7 +447,10 @@ def cmd_train(config: dict[str, Any]) -> None:
         fp16=precision_flags["fp16"],
         # Early stopping is about hours of wasted GPU: an eval that has stopped
         # improving for N rounds is not going to improve in round N+1.
-        load_best_model_at_end=early_stopping and metric_for_best is not None,
+        # Cannot reload a best model when no checkpoints are written: with
+        # `save_strategy="no"` the Trainer has nowhere to keep it. Early stopping
+        # still stops the run; it just leaves the final weights in place.
+        load_best_model_at_end=False,
         metric_for_best_model=metric_for_best,
         greater_is_better=False if metric_for_best is not None else None,
         gradient_checkpointing=bool(config.get("gradientCheckpointing", True)),
@@ -779,7 +801,7 @@ def cmd_eval(config: dict[str, Any]) -> None:
     except Exception as error:  # noqa: BLE001 - a metric must never fail a run
         log(f"文本相似度计算失败，已跳过：{error}", level="warn")
 
-    os.makedirs(out_dir, exist_ok=True)
+    _ensure_dir(out_dir)
     report_path = os.path.join(out_dir, "eval.json")
     samples_path = os.path.join(out_dir, "eval-outputs.jsonl")
     with open(samples_path, "w", encoding="utf-8") as handle:
@@ -830,11 +852,73 @@ def cmd_calibrate(config: dict[str, Any]) -> None:
 COMMANDS = {"train": cmd_train, "merge": cmd_merge, "export": cmd_export, "eval": cmd_eval, "calibrate": cmd_calibrate}
 
 
+
+
+def _ensure_dir(path: str) -> None:
+    """Make sure `path` exists, tolerating a process that cannot create directories.
+
+    On this machine `os.mkdir` returns EACCES for every directory under the plugin
+    root, while the same call from Node or .NET succeeds ? a scanner or filter
+    driver treats the Python process differently. The host therefore creates the
+    directories it knows about before spawning the worker (lib/backend.mjs), and
+    this function only verifies:
+
+      - a directory that already exists is left alone (never re-created, which is
+        where the EACCES came from)
+      - a missing directory triggers one attempt, so a worker run by hand in a
+        normal environment still works
+      - the result is checked, and the failure names the path, because "Permission
+        denied" on its own has sent a user looking for a permissions problem that
+        did not exist
+
+    """
+    if os.path.isdir(path):
+        return
+    try:
+        os.makedirs(path, exist_ok=True)
+    except OSError:
+        pass
+    if not os.path.isdir(path):
+        raise OSError(
+            f"无法使用输出目录 {path}：该路径不存在且无法创建。"
+            "上层应当在启动 worker 之前建好它（lib/backend.mjs）。"
+        )
+
+
+def _install_tempdir() -> None:
+    """Point tempfile at a directory this process owns, before torch is imported.
+
+    On this machine `tempfile.mkstemp` blocks for minutes inside the system temp
+    directory ? a scanner or a filter driver holds the write ? so `gettempdir()`
+    rejects every candidate and falls back to the current working directory. Once
+    even that fails, callers see "No usable temporary directory found".
+
+    The host passes TMPDIR in the worker's environment (lib/backend.mjs). Setting
+    it here as well covers a manual run, and doing it before any ML import means
+    torch's own temp access benefits too. A directory that cannot be created is
+    left alone: the failure then surfaces where it is used, with the real path.
+    """
+    candidate = (
+        os.environ.get("TMPDIR")
+        or os.environ.get("TEMP")
+        or os.environ.get("FNT_TMPDIR")
+        or ""
+    )
+    if not candidate:
+        return
+    try:
+        os.makedirs(candidate, exist_ok=True)
+        tempfile.tempdir = candidate
+    except OSError:
+        return
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="fnt_worker", description="DSH fine-tune worker")
     parser.add_argument("verb", choices=sorted(COMMANDS))
     parser.add_argument("--config", required=True, help="path to the JSON config the host wrote")
     args = parser.parse_args(argv)
+    _install_tempdir()
     config = load_config(args.config)
     emit(kind="phase", phase="start", message=f"{args.verb} 开始")
     try:

@@ -804,6 +804,46 @@ window.__ModuleLoader__.load({
         }
       }
 
+      /**
+       * Install state, polled from `env.status`.
+       *
+       * The panel cannot know whether the machine has a working Python stack until
+       * it asks, and the answer decides whether training is even offerable ? so it
+       * is fetched on mount rather than discovered by pressing ???? and reading
+       * the failure.
+       */
+      const [envState, setEnvState] = React.useState(null)
+      const [installLog, setInstallLog] = React.useState([])
+      React.useEffect(() => {
+        let stop = false
+        const pull = async () => {
+          try {
+            const result = await postAction({ op: 'env.status' })
+            if (!stop && result && result.ok === true) setEnvState(result)
+          } catch {
+            // The route is missing on an older host; the install card simply does
+            // not appear.
+          }
+        }
+        pull()
+        return () => { stop = true }
+      }, [])
+      const startInstall = async (force) => {
+        setInstallLog([{ phase: 'start', message: force ? '?????' : '?????' }])
+        try {
+          const result = await postAction({ op: 'env.install', confirm: true, force })
+          const events = (result && result.events) || []
+          setInstallLog(events)
+          if (result && result.ok === true) say('??????????')
+          else say(`?????${(result && result.result && result.result.reason) || '????'}`)
+          const again = await postAction({ op: 'env.status' })
+          if (again && again.ok === true) setEnvState(again)
+        } catch (err) {
+          setInstallLog((previous) => previous.concat([{ phase: 'error', message: err.message, level: 'bad' }]))
+          say(`?????${err.message}`)
+        }
+      }
+
       const settings = (state && state.settings) || {}
       const runs = (state && state.runs) || []
       const datasets = (state && state.datasets) || []
@@ -820,6 +860,31 @@ window.__ModuleLoader__.load({
           setBusy('')
         }
       }, [refresh])
+
+      /**
+       * Delete a dataset, after the user confirms.
+       *
+       * `window.confirm` rather than an inline "are you sure" row: the delete is
+       * irreversible, the button sits next to a select-this-row click target, and a
+       * native dialog is the one confirmation that cannot be dismissed by the same
+       * stray click that opened it.
+       */
+      const removeDataset = async (datasetId, label) => {
+        if (typeof window.confirm === 'function'
+          && !window.confirm(`删除数据集 ${datasetId}（${label}？
+
+文件会被删掉，不能恢复。`)) {
+          return
+        }
+        try {
+          await act('删除数据集', { op: 'dataset.delete', datasetId, confirm: true })
+          setDatasetIds((previous) => previous.filter((id) => id !== datasetId))
+          if (preview !== null && preview.manifest && preview.manifest.id === datasetId) setPreview(null)
+          say(`已删除 ${datasetId}`)
+        } catch (err) {
+          say(`删除失败：${err.message}`)
+        }
+      }
 
       const buildFromFile = async () => {
         try {
@@ -867,6 +932,27 @@ window.__ModuleLoader__.load({
         }
       }
 
+      /**
+       * Delete a finished run and its artifacts.
+       *
+       * A run in flight is refused by the host, so the button only appears on a
+       * finished one ? but a stale click on a just-started run must still say why
+       * rather than fail silently, which is what the message below is for.
+       */
+      const removeRun = async (id) => {
+        if (typeof window.confirm === 'function'
+          && !window.confirm(`删除训练任务 ${id}？\n\n任务记录和训练产物（adapter）都会被删掉，不能恢复。`)) {
+          return
+        }
+        try {
+          await act('删除任务', { op: 'run.delete', id, confirm: true })
+          if (selectedRun === id) { setSelectedRun(null); setRunDetail(null) }
+          say(`已删除 ${id}`)
+        } catch (err) {
+          say(`删除失败：${err.message}`)
+        }
+      }
+
       const openRun = (id) => {
         setSelectedRun(id === selectedRun ? null : id)
         if (id !== selectedRun) setRunDetail(null)
@@ -902,6 +988,27 @@ window.__ModuleLoader__.load({
           h('button', { style: busy === '' ? S.btn : { ...S.btn, ...S.btnDisabled }, disabled: busy !== '', onClick: () => refresh(true) }, '刷新')),
         h('div', { style: S.note }, gpuLine),
 
+        // The install card. Offered only when this host has the route and no ready
+        // venv: a user whose environment is already built never sees it, and one who
+        // needs it is told what will be downloaded before anything starts.
+        envState !== null && envState.ready === null
+          ? h('div', { style: { ...S.banner, borderColor: C.accent } },
+            h('span', null, '???? Python ???torch ??? 3?5 GB?????????? '
+              + (envState.venvPython || '') + ' ???????????'),
+            h('button', {
+              style: busy === '' ? S.btnPrimary : { ...S.btnPrimary, ...S.btnDisabled },
+              disabled: busy !== '',
+              onClick: () => startInstall(false),
+            }, installLog.length === 0 ? '????' : '????'))
+          : null,
+        installLog.length === 0
+          ? null
+          : h('div', { style: { ...S.list, maxHeight: 200, overflowY: 'auto' } },
+            installLog.map((event, index) => h('div', {
+              key: `${index}-${event.phase}`,
+              style: event.level === 'bad' ? S.err : event.level === 'warn' ? S.warnText : S.note,
+            }, `${event.phase}: ${event.message}`))),
+
         settings.allowSpawn !== true
           ? h('div', { style: { ...S.banner, color: C.warn, borderColor: C.warn } },
             h('span', null, '「允许启动训练进程」没打开：数据可以准备，训练不能开始。'),
@@ -931,6 +1038,40 @@ window.__ModuleLoader__.load({
                 disabled: datasetFile === '' || busy !== '',
                 onClick: buildFromFile,
               }, '导入')))
+          : null,
+
+        tab === 'data' && lastCard !== null ? DataCard(lastCard) : null,
+
+        // The dataset list. Multi-select: several datasets can be trained on
+        // together, and the training run concatenates them per split.
+        tab === 'data'
+          ? Section('数据集', h('div', { style: S.note }, datasetIds.length === 0
+            ? '勾选一个或多个数据集作为这次训练的数据。'
+            : `已选 ${datasetIds.length} 个，训练时会合并成一个。`),
+            datasets.length === 0
+              ? h('div', { style: S.note }, '还没有数据集。上面导入一个文件，或用插件自带的数据集。')
+              : datasets.map((dataset, index, list) => {
+                const picked = datasetIds.indexOf(dataset.id) !== -1
+                const toggle = () => setDatasetIds((previous) => (picked
+                  ? previous.filter((id) => id !== dataset.id)
+                  : previous.concat(dataset.id)))
+                return h('div', {
+                  key: dataset.id,
+                  style: { ...(index === list.length - 1 ? S.rowLast : S.row), ...S.clickable },
+                  onClick: toggle,
+                  title: dataset.id,
+                },
+                  h('input', { type: 'checkbox', checked: picked, onChange: toggle, onClick: (event) => event.stopPropagation() }),
+                  h('span', { style: S.name }, dataset.id),
+                  h('span', { style: S.num }, `train ${fmt(dataset.counts.train)} · val ${fmt(dataset.counts.val)} · eval ${fmt(dataset.counts.eval)}`),
+                  // Last in the row, so the destructive action sits away from the
+                  // counts a user reads and never in the path of the checkbox.
+                  h('button', {
+                    style: S.btnDanger,
+                    onClick: (event) => { event.stopPropagation(); removeDataset(dataset.id, `train ${fmt(dataset.counts.train)}`) },
+                    title: '删除这个数据集（不可恢复）',
+                  }, '删除'))
+              }))
           : null,
 
         // ---------------------------------------------------------- 2. train
@@ -1109,7 +1250,11 @@ window.__ModuleLoader__.load({
                   h('span', { style: S.num }, run.metrics && typeof run.metrics.loss === 'number' ? `loss ${run.metrics.loss.toFixed(4)}` : '—'),
                   run.state === 'running' || run.state === 'queued'
                     ? h('button', { style: S.btnDanger, onClick: (event) => { event.stopPropagation(); cancelRun(run.id) } }, '取消')
-                    : null)
+                    : h('button', {
+                      style: S.btnDanger,
+                      onClick: (event) => { event.stopPropagation(); removeRun(run.id) },
+                      title: '删除这个任务及其产物（不可恢复）',
+                    }, '删除'))
               }))
           : null,
 

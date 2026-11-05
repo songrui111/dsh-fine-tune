@@ -14,7 +14,7 @@
  * a GPU process and `publish.prepare` is the door to Ollama.
  */
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, join, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
@@ -23,7 +23,9 @@ import { createJobStore } from './lib/jobs.mjs';
 import { createLocalBackend, createSshBackend } from './lib/backend.mjs';
 import { createSshExec, validateTarget, shellQuote } from './lib/ssh.mjs';
 import { createSftpTransfer, downloadArtifacts, uploadDataset } from './lib/transfer.mjs';
-import { buildDataset, listDatasets, evaluationPair, previewPage, loadExclusions, saveExclusions, writeFilteredDataset, writeMergedDataset } from './lib/dataset.mjs';
+import { install } from './lib/install.mjs';
+import { readReady, venvPaths } from './lib/bootstrap.mjs';
+import { buildDataset, listDatasets, evaluationPair, previewPage, loadExclusions, saveExclusions, deleteDataset, writeFilteredDataset, writeMergedDataset } from './lib/dataset.mjs';
 import { listSources, saveSource, loadSource, validateSourceInput } from './lib/sources.mjs';
 import { estimateMemory, parseNvidiaSmi, recommendation } from './lib/hardware.mjs';
 import { MODES, capabilityOf, planSummary, validateTrainingPlan } from './lib/training.mjs';
@@ -155,6 +157,14 @@ function resolveConfig(raw, dataDir) {
   const { dataDir: _ignoredDir, ...fromFile } = file;
   const merged = { ...declared, ...(raw ?? {}), ...fromFile };
   if (dataDir !== undefined) merged.dataDir = dataDir;
+  // The installer writes its venv under the data directory, so a user who ran it
+  // gets a working pythonPath without editing any config file. An explicit
+  // pythonPath still wins: someone who pointed at their own interpreter did so on
+  // purpose.
+  if (typeof merged.pythonPath !== 'string' || merged.pythonPath.trim() === '') {
+    const bootstrapped = dataDir === undefined ? null : venvPaths(dataDir).python;
+    if (bootstrapped !== null && existsSync(bootstrapped)) merged.pythonPath = bootstrapped;
+  }
   return merged;
 }
 
@@ -185,7 +195,13 @@ export function mount(ctx, settings) {
     outputs: join(root, 'outputs'),
     downloads: join(root, 'downloads'),
   };
-  mkdirSync(paths.datasets, { recursive: true });
+  // Every path the plugin writes to, created once at mount. Only `datasets` used to
+  // be made here; a training run then wrote to `outputs/<id>`, which did not exist,
+  // and the worker failed with PermissionError EACCES on a directory nobody had
+  // created. Creating them all up front makes that class of failure impossible.
+  for (const dir of [paths.datasets, paths.runs, paths.outputs, paths.downloads]) {
+    mkdirSync(dir, { recursive: true });
+  }
 
   let gpuCache = { time: 0, value: null };
   const invalidateGpu = () => { gpuCache = { time: 0, value: null }; };
@@ -496,6 +512,15 @@ function collectRemoteArtifacts({ store, id, target, remoteRun, localOut, sshExe
  * Keeping them behind a single route with an `op` field (instead of eight paths)
  * means the gate, the body cap and the error shape are written once.
  */
+/**
+ * The install currently running, or null.
+ *
+ * Module scope on purpose: a venv is a shared resource, and two concurrent
+ * `env.install` calls would fight over it. The route reads this before starting,
+ * so the second request gets a clear refusal instead of corrupting the first.
+ */
+let installing = null;
+
 export async function action({ body, settings, paths, store, backends, gpu, invalidateGpu }) {
   const op = String(body?.op ?? '');
   const root = paths.root;
@@ -551,6 +576,49 @@ export async function action({ body, settings, paths, store, backends, gpu, inva
       if (backends[backend] === undefined) return { status: 400, body: { ok: false, error: `未知后端: ${backend}` } };
       const result = await backends[backend].probe(body?.target ?? settings.sshTarget);
       return { body: { ok: result?.ok === true, result } };
+    }
+    case 'env.install': {
+      // The one action that downloads gigabytes, so it is explicit and its progress
+      // is streamed: `install()` calls onEvent for each step. Concurrent installs
+      // would fight over the same venv, so a second request while one runs is
+      // refused rather than queued.
+      if (installing !== null) {
+        return { status: 409, body: { ok: false, error: `????????${installing.phase}` } };
+      }
+      if (body?.confirm !== true) {
+        return { status: 409, body: { ok: false, error: '?????? 3-5 GB ???????? confirm: true' } };
+      }
+      installing = { phase: 'starting' };
+      const events = [];
+      try {
+        const result = await install({
+          root,
+          force: body?.force === true,
+          onEvent: (event) => {
+            installing = event;
+            events.push(event);
+            warn(`[install] ${event.phase}: ${event.message}`);
+          },
+        });
+        installing = null;
+        return { body: { ok: result.ok === true, result, events: events.slice(-40) } };
+      } catch (error) {
+        installing = null;
+        return { status: 500, body: { ok: false, error: `?????${error?.message ?? error}`, events: events.slice(-40) } };
+      }
+    }
+    case 'env.status': {
+      const ready = readReady(root);
+      return {
+        body: {
+          ok: true,
+          installing,
+          ready,
+          venvPython: venvPaths(root).python,
+          venvExists: existsSync(venvPaths(root).python),
+          effectivePythonPath: settings.pythonPath,
+        },
+      };
     }
     case 'source.create': {
       const validated = validateSourceInput(body?.source);
@@ -631,6 +699,18 @@ export async function action({ body, settings, paths, store, backends, gpu, inva
         store.move(id, 'failed', { error: { code: 'data', message: '移除之后训练集是空的' } });
         return { status: 409, body: { ok: false, error: '移除之后训练集是空的：恢复几条样本再训。' } };
       }
+      // The host creates every directory this run will write to, before the worker
+      // starts. On this machine Python cannot create a directory anywhere under the
+      // plugin root ? `os.mkdir` returns EACCES while the same call from Node or
+      // .NET succeeds, which points at a filter driver or scanner that treats the
+      // Python process differently. Rather than fight that, the parent does it: a
+      // worker that only ever writes *files* into directories it was handed has one
+      // fewer thing to get wrong.
+      //
+      // Also belt and braces: mount() creates these, but a run must not depend on
+      // the mount having happened after the directories were removed by hand.
+      const localOut = join(paths.outputs, id);
+      for (const dir of [paths.outputs, localOut]) mkdirSync(dir, { recursive: true });
       const remoteRoot = String(settings.sshRoot ?? '/tmp/dsh-fine-tune').replace(/\/+$/, '');
       const remoteRun = `${remoteRoot}/runs/${id}`;
       const spec = {
@@ -639,7 +719,7 @@ export async function action({ body, settings, paths, store, backends, gpu, inva
         // Local runs read the staged directory directly; a remote run reads the
         // path the upload below populated, so the two never disagree.
         data: backend === 'ssh' ? `${remoteRun}/data` : effective.dir,
-        out: backend === 'ssh' ? remoteRun : join(paths.outputs, id),
+        out: backend === 'ssh' ? remoteRun : localOut,
         dryRun: body?.dryRun === true,
         ...plan,
         ...(backend === 'ssh' ? { target: String(body?.target ?? settings.sshTarget ?? ''), remoteRoot } : {}),
@@ -686,6 +766,38 @@ export async function action({ body, settings, paths, store, backends, gpu, inva
       store.move(id, 'cancelled');
       return { body: { ok: true, run: store.get(id) } };
     }
+    case 'run.delete': {
+      // Removes a finished run from the list *and* deletes its artifacts. Refused
+      // while the run is active: deleting the directory under a live worker would
+      // leave it writing into a path that no longer exists. Cancel first, then
+      // delete ? two deliberate steps for one destructive action.
+      if (body?.confirm !== true) {
+        return { status: 409, body: { ok: false, error: '???????????????? confirm: true' } };
+      }
+      const id = String(body?.id ?? '');
+      if (!/^[a-z]+-\d{14}-[a-z0-9]{6}$/.test(id)) return { status: 400, body: { ok: false, error: '?? id ???' } };
+      // Disk is the source of truth, not the in-memory map: a run created before
+      // this process started (or one whose record failed to parse) is still a
+      // directory a user may want gone. The map only adds the "is it live" check.
+      const runFile = join(paths.runs, id, 'run.json');
+      if (!existsSync(runFile)) return { status: 404, body: { ok: false, error: `??????${id}` } };
+      const inMemory = store.job(id);
+      let state = null;
+      try {
+        state = JSON.parse(readFileSync(runFile, 'utf8')).state ?? null;
+      } catch { /* an unreadable record is still deletable */ }
+      if (inMemory !== null) state = inMemory.record.state;
+      if (state === 'running' || state === 'queued') {
+        return { status: 409, body: { ok: false, error: '?????????????' } };
+      }
+      // The run record lives in runs/<id>; the worker's output in outputs/<id>.
+      // Both go, or the next mount restores a run whose data is half gone.
+      for (const dir of [join(paths.runs, id), join(paths.outputs, id)]) {
+        rmSync(dir, { recursive: true, force: true });
+      }
+      store.forget(id);
+      return { body: { ok: true, id } };
+    }
     case 'dataset.preview': {
       const datasetId = String(body?.datasetId ?? '');
       if (!/^[a-z0-9][a-z0-9._-]{1,60}$/.test(datasetId)) return { status: 400, body: { ok: false, error: 'datasetId 不合法' } };
@@ -709,6 +821,17 @@ export async function action({ body, settings, paths, store, backends, gpu, inva
       } catch (error) {
         return { status: 400, body: { ok: false, error: error?.message ?? String(error) } };
       }
+    }
+    case 'dataset.delete': {
+      // Irreversible, so the caller has to say so explicitly: the panel asks for
+      // confirmation and sends `confirm: true`. Without it the route refuses,
+      // which stops a stray click (or a retried request) from removing data.
+      if (body?.confirm !== true) {
+        return { status: 409, body: { ok: false, error: '??????????????? confirm: true' } };
+      }
+      const removed = deleteDataset(root, body?.datasetId);
+      if (removed.ok !== true) return { status: 400, body: { ok: false, error: removed.error } };
+      return { body: { ok: true, id: removed.id } };
     }
     case 'dataset.exclude': {
       // Removal / restoration of one sample by hash. Reversible on purpose: the
