@@ -1,0 +1,66 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # Everything that does not need a GPU. This is the gate a PR must pass.
+  unit:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: unit, host and client
+        run: npm test
+
+  worker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      # The worker is deliberately import-clean without torch: protocol tests must
+      # run on a machine that has no ML stack, which is also the guarantee that
+      # `--help` and config validation work before anything is installed.
+      - name: worker protocol
+        run: python -m unittest discover -s python/tests
+
+  transport:
+    # The SSH/SFTP tests start a throwaway server, so they need the Python deps
+    # for it but no GPU.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: install the test server's dependencies
+        run: |
+          python -m venv python/.venv
+          python/.venv/bin/pip install --quiet asyncssh cryptography
+      - name: ssh transport
+        run: |
+          # The test harness looks for the venv's interpreter under Scripts/ on
+          # Windows and bin/ elsewhere; a symlink keeps one code path.
+          ln -sf "$PWD/python/.venv/bin/python" "$PWD/python/.venv/Scripts/python.exe" 2>/dev/null || true
+          mkdir -p python/.venv/Scripts && ln -sf "$PWD/python/.venv/bin/python" python/.venv/Scripts/python.exe
+          node test/ssh-e2e.mjs
+
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: shellcheck scripts/setup-remote.sh

@@ -1,0 +1,73 @@
+{
+  "name": "dsh-fine-tune",
+  "version": "0.1.0",
+  "description": "Fine-tuning bench for DSH: mine (scenario → right action) samples from real session logs or external datasets, audit and dedupe them, run QLoRA on a local GPU or a remote SSH host, then A/B the result against the base model before anything is published. · 面向 DSH 的微调工作台：从真实会话日志或外部数据集抽「情景→应做动作」样本，审数据、去重，本地或远端 GPU 跑 QLoRA，先 A/B 对比再发布。",
+  "type": "module",
+  "main": "index.js",
+  "author": "songrui",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "lib",
+    "client",
+    "python/fnt_worker",
+    "python/tests",
+    "scripts/setup-remote.sh",
+    "cordis.patch.yml",
+    "README.md",
+    "README.zh-CN.md",
+    "DESIGN.md",
+    "M0-LAB.md",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "dsh": ">=0.1.7-rc.2"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/schemastery": ">=3.18.0"
+  },
+  "scripts": {
+    "test": "node test/unit.mjs && node test/host.mjs && node test/client.mjs",
+    "test:unit": "node test/unit.mjs",
+    "test:py": "python -m unittest discover -s python/tests",
+    "test:ssh": "node test/ssh-e2e.mjs",
+    "test:ssh-train": "node test/ssh-train-e2e.mjs",
+    "sync": "node scripts/sync.mjs"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "fine-tune",
+    "lora",
+    "qlora",
+    "sft",
+    "training",
+    "ollama",
+    "agent"
+  ],
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "engines": {
+      "dsh": ">=0.1.7-rc.2"
+    },
+    "client": {
+      "platform": "web"
+    }
+  }
+}
