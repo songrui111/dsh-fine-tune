@@ -109,6 +109,14 @@ window.__ModuleLoader__.load({
       // Border and shadow are DSH's own popup treatment (`--dsw-elevation-panel`
       // with `--dsw-alias-border-l3`), so this list separates from the page the way
       // the host's own menus do.
+      // Progress: a bar that can be read at a glance across the room, because an
+      // install this long is something the user walks away from.
+      progressBox: { display: 'flex', flexDirection: 'column', gap: 6, padding: '10px 12px', border: `1px solid ${C.line}`, borderRadius: 10 },
+      progressHead: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 },
+      progressStage: { fontSize: 13, fontWeight: 600, color: C.text },
+      progressMeta: { fontSize: 11.5, color: C.dim, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' },
+      progressTrack: { height: 8, borderRadius: 999, background: C.soft, overflow: 'hidden' },
+      progressFill: { height: '100%', borderRadius: 999, transition: 'width .3s ease' },
       pickerPopup: { position: 'absolute', top: '100%', left: 0, marginTop: 4, minWidth: '100%', zIndex: 30, background: C.solid, color: C.solidText, font: 'inherit', fontSize: 12.5, border: '0.5px solid #0000001f', borderRadius: 8, boxShadow: '0 3px 8px 0 #00000014, 0 0 16px 0 #0000000f', maxHeight: 260, overflowY: 'auto' },
       checkList: { display: 'flex', flexDirection: 'column', gap: 6, padding: '9px 10px' },
       inputDisabled: { fontSize: 12, padding: '4px 6px', borderRadius: 5, border: `1px solid ${C.line}`, background: 'transparent', color: C.dim, opacity: 0.6 },
@@ -828,19 +836,43 @@ window.__ModuleLoader__.load({
         pull()
         return () => { stop = true }
       }, [])
+      /**
+       * Start the install and follow it.
+       *
+       * The host returns immediately and the work continues in the background, so
+       * the panel polls `env.status` once a second and re-renders the bar. An
+       * awaited request would leave the UI frozen for the whole five minutes.
+       */
       const startInstall = async (force) => {
-        setInstallLog([{ phase: 'start', message: force ? '?????' : '?????' }])
+        setInstallLog([{ phase: 'start', stage: '准备', percent: 0, elapsedMs: 0, message: force ? '重建环境…' : '开始安装…' }])
         try {
-          const result = await postAction({ op: 'env.install', confirm: true, force })
-          const events = (result && result.events) || []
-          setInstallLog(events)
-          if (result && result.ok === true) say('??????????')
-          else say(`?????${(result && result.result && result.result.reason) || '????'}`)
-          const again = await postAction({ op: 'env.status' })
-          if (again && again.ok === true) setEnvState(again)
+          const started = await postAction({ op: 'env.install', confirm: true, force })
+          if (started && started.installing) setInstallLog(started.installing.events || [])
         } catch (err) {
-          setInstallLog((previous) => previous.concat([{ phase: 'error', message: err.message, level: 'bad' }]))
-          say(`?????${err.message}`)
+          setInstallLog((previous) => previous.concat([{ phase: 'error', level: 'bad', message: err.message }]))
+          say(`安装失败：${err.message}`)
+          return
+        }
+        // Poll until the guard reports finished.
+        for (let attempt = 0; attempt < 1800; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 1000))
+          let status = null
+          try {
+            status = await postAction({ op: 'env.status' })
+          } catch {
+            continue
+          }
+          const running = status && status.installing
+          if (running && Array.isArray(running.events) && running.events.length > 0) {
+            setInstallLog(running.events)
+          }
+          if (running === null || running === undefined || running.finished === true) {
+            if (running && running.ok === true) say('环境就绪，可以训练了')
+            else if (running && running.reason) say(`安装失败：${running.reason}`)
+            const again = await postAction({ op: 'env.status' })
+            if (again && again.ok === true) setEnvState(again)
+            return
+          }
         }
       }
 
@@ -1015,13 +1047,37 @@ window.__ModuleLoader__.load({
               onClick: () => startInstall(false),
             }, installLog.length === 0 ? '????' : '????'))
           : null,
+        // The progress panel. A bar, the current stage and a clock, because the
+        // install runs 5 to 20 minutes and a scrolling log gives no sense of whether
+        // it is nearly done or stuck. `percent` is weighted by measured stage cost,
+        // so the bar moves at roughly the rate the work actually happens.
         installLog.length === 0
           ? null
-          : h('div', { style: { ...S.list, maxHeight: 200, overflowY: 'auto' } },
-            installLog.map((event, index) => h('div', {
-              key: `${index}-${event.phase}`,
-              style: event.level === 'bad' ? S.err : event.level === 'warn' ? S.warnText : S.note,
-            }, `${event.phase}: ${event.message}`))),
+          : (() => {
+            const last = installLog[installLog.length - 1]
+            const percent = typeof last.percent === 'number' ? last.percent : 0
+            const elapsed = typeof last.elapsedMs === 'number' ? last.elapsedMs : 0
+            const failed = last.level === 'bad'
+            const finished = last.phase === 'done'
+            return h('div', { style: S.progressBox },
+              h('div', { style: S.progressHead },
+                h('span', { style: S.progressStage },
+                  failed ? '????' : finished ? '????' : (last.stage || last.phase)),
+                h('span', { style: S.progressMeta },
+                  `${percent}%??? ${Math.floor(elapsed / 60000)}:${String(Math.floor((elapsed % 60000) / 1000)).padStart(2, '0')}`)),
+              h('div', { style: S.progressTrack },
+                h('div', { style: { ...S.progressFill, width: `${percent}%`, background: failed ? C.bad : finished ? C.ok : C.accent } })),
+              h('div', { style: S.note }, last.message),
+              // The full log stays available but collapsed: useful when something
+              // goes wrong, noise while it is going right.
+              h('details', { style: { marginTop: 4 } },
+                h('summary', { style: S.note }, `?????${installLog.length} ??`),
+                h('div', { style: { ...S.list, maxHeight: 160, overflowY: 'auto', marginTop: 4 } },
+                  installLog.map((event, index) => h('div', {
+                    key: `${index}-${event.phase}`,
+                    style: event.level === 'bad' ? S.err : event.level === 'warn' ? S.warnText : S.note,
+                  }, `${event.phase}: ${event.message}`)))))
+          })(),
 
         settings.allowSpawn !== true
           ? h('div', { style: { ...S.banner, color: C.warn, borderColor: C.warn } },

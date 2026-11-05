@@ -591,37 +591,48 @@ export async function action({ body, settings, paths, store, backends, gpu, inva
       // is streamed: `install()` calls onEvent for each step. Concurrent installs
       // would fight over the same venv, so a second request while one runs is
       // refused rather than queued.
+      if (installing !== null && installing.finished === true) installing = null;
       if (installing !== null) {
         return { status: 409, body: { ok: false, error: `????????${installing.phase}` } };
       }
       if (body?.confirm !== true) {
         return { status: 409, body: { ok: false, error: '?????? 3-5 GB ???????? confirm: true' } };
       }
-      installing = { phase: 'starting' };
+      // The install runs in the background and the route returns at once, so the
+      // panel can poll `env.status` for progress. Awaiting it here would freeze the
+      // browser for five minutes with no feedback ? which is why the earlier version
+      // showed nothing until the end.
       const events = [];
-      try {
-        const result = await install({
-          root,
-          force: body?.force === true,
-          onEvent: (event) => {
-            installing = event;
-            events.push(event);
-            warn(`[install] ${event.phase}: ${event.message}`);
-          },
-        });
-        installing = null;
-        return { body: { ok: result.ok === true, result, events: events.slice(-40) } };
-      } catch (error) {
-        installing = null;
-        return { status: 500, body: { ok: false, error: `?????${error?.message ?? error}`, events: events.slice(-40) } };
-      }
+      const job = { phase: 'starting', message: '????', stage: '??', percent: 0, elapsedMs: 0 };
+      installing = { ...job, events };
+      const runInstall = install({
+        root,
+        force: body?.force === true,
+        onEvent: (event) => {
+          events.push(event);
+          // The newest event is what the panel renders; the array is the history.
+          Object.assign(job, event);
+          installing = { ...job, events };
+          warn(`[install] ${event.phase}: ${event.message}`);
+        },
+      }).then((result) => {
+        installing = { ...job, events, finished: true, ok: result.ok === true, reason: result.reason ?? null };
+        return result;
+      }).catch((error) => {
+        installing = { ...job, events, finished: true, ok: false, reason: String(error?.message ?? error) };
+        return { ok: false, reason: String(error?.message ?? error) };
+      });
+      void runInstall;
+      return { body: { ok: true, started: true, installing } };
     }
     case 'env.status': {
       const ready = readReady(root);
       return {
         body: {
           ok: true,
-          installing,
+          // The full event history travels with the status so one poll renders the
+          // bar, the stage, the clock and the log together.
+          installing: installing === null ? null : installing,
           ready,
           venvPython: venvPaths(root).python,
           venvExists: existsSync(venvPaths(root).python),
