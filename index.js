@@ -14,7 +14,7 @@
  * a GPU process and `publish.prepare` is the door to Ollama.
  */
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
@@ -624,6 +624,35 @@ export async function action({ body, settings, paths, store, backends, gpu, inva
       });
       void runInstall;
       return { body: { ok: true, started: true, installing } };
+    }
+    case 'env.enableSpawn': {
+      // Turns on the one setting that lets the plugin start a training process.
+      //
+      // This exists because the gate refuses a first run with an instruction to go
+      // edit a JSON file and restart, which is where a new user stops. The panel
+      // asks in a dialog instead, and this writes the file - the same edit, made
+      // explicit and explained. It is still the user's decision: the route only
+      // runs after they have confirmed, and it takes `confirm: true` so that no
+      // stray request can widen the plugin's own permissions.
+      if (body?.confirm !== true) {
+        return { status: 409, body: { ok: false, error: '开启训练权限需要确认：请带 confirm: true' } };
+      }
+      const file = configFileFor(root);
+      let current = {};
+      try {
+        if (existsSync(file)) {
+          const parsed = JSON.parse(readFileSync(file, 'utf8'));
+          if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) current = parsed;
+        }
+      } catch {
+        // A broken config is replaced rather than appended to: keeping invalid JSON
+        // would leave the plugin unable to read anything the user set.
+        current = {};
+      }
+      current.allowSpawn = true;
+      mkdirSync(root, { recursive: true });
+      writeFileSync(file, `${JSON.stringify(current, null, 2)}\n`, 'utf8');
+      return { body: { ok: true, file, restartRequired: true, settings: { ...current } } };
     }
     case 'env.status': {
       const ready = readReady(root);

@@ -111,6 +111,23 @@ window.__ModuleLoader__.load({
       // the host's own menus do.
       // Progress: a bar that can be read at a glance across the room, because an
       // install this long is something the user walks away from.
+      // A dialog layer: covers the panel so nothing behind it can be clicked by
+      // accident, and dims it so the choice is the only thing to look at.
+      overlay: {
+        position: 'fixed', inset: 0, background: '#0f111566', zIndex: 100,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
+      },
+      dialog: {
+        display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 460, width: '100%',
+        padding: 18, borderRadius: 12, background: C.solid, color: C.solidText,
+        border: `0.5px solid #0000001f`, boxShadow: '0 8px 32px 0 #00000029',
+      },
+      dialogTitle: { fontSize: 14, fontWeight: 600 },
+      dialogCode: {
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12,
+        padding: '6px 8px', borderRadius: 6, background: C.soft, color: C.text,
+      },
+      dialogActions: { display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 6 },
       progressBox: { display: 'flex', flexDirection: 'column', gap: 6, padding: '10px 12px', border: `1px solid ${C.line}`, borderRadius: 10 },
       progressHead: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 },
       progressStage: { fontSize: 13, fontWeight: 600, color: C.text },
@@ -949,7 +966,40 @@ window.__ModuleLoader__.load({
         }
       }
 
+      /**
+       * The first-run permission dialog.
+       *
+       * `allowSpawn` defaults to off - a plugin should not be able to start a
+       * process the moment it is installed. But the refusal that follows tells a new
+       * user to go edit a JSON file and restart, which is where they stop. So the
+       * panel asks instead: one dialog that says what the permission is for, and a
+       * button that writes exactly the same setting. The gate is not bypassed - it
+       * is answered, by the person it protects.
+       */
+      const [spawnPrompt, setSpawnPrompt] = React.useState(false)
+      const [spawnBusy, setSpawnBusy] = React.useState(false)
+      const enableSpawn = async () => {
+        setSpawnBusy(true)
+        try {
+          const result = await postAction({ op: 'env.enableSpawn', confirm: true })
+          setSpawnPrompt(false)
+          say(result && result.restartRequired
+            ? '已开启训练权限。重启 DSH 后生效，然后回来再点一次「开始训练」。'
+            : '已开启训练权限')
+        } catch (err) {
+          say(`开启失败：${err.message}`)
+        } finally {
+          setSpawnBusy(false)
+        }
+      }
+
       const startTraining = async () => {
+        // Ask before the run is attempted, so the user sees one explained dialog
+        // instead of a 403 and a file path.
+        if (settings.allowSpawn !== true) {
+          setSpawnPrompt(true)
+          return
+        }
         const invalid = validatePlan(plan)
         if (invalid !== null) {
           setPlanError(invalid)
@@ -1450,6 +1500,34 @@ window.__ModuleLoader__.load({
                   : publish.reason))
           })()
           : null,
+
+        // The permission dialog. Mounted at the root and positioned fixed, so it
+        // covers the panel rather than pushing the layout around - the same rule the
+        // dropdown popups follow.
+        !spawnPrompt
+          ? null
+          : h('div', { style: S.overlay },
+            h('div', { style: S.dialog },
+              h('div', { style: S.dialogTitle }, '开启训练需要一项授权'),
+              h('div', { style: S.note },
+                '训练会在你的电脑上启动一个 Python 进程，并占用显卡。'
+                + '这一项默认关着，是为了让「装上插件」不等于「自己开始跑东西」。'),
+              h('div', { style: S.note },
+                '开启后会写入：'),
+              h('div', { style: S.dialogCode }, 'allowSpawn: true'),
+              h('div', { style: S.note },
+                '写在插件的配置文件里，需要重启 DSH 才生效。随时可以改回 false。'),
+              h('div', { style: S.dialogActions },
+                h('button', {
+                  style: spawnBusy ? { ...S.btn, ...S.btnDisabled } : S.btn,
+                  disabled: spawnBusy,
+                  onClick: () => setSpawnPrompt(false),
+                }, '取消'),
+                h('button', {
+                  style: spawnBusy ? { ...S.btnPrimary, ...S.btnDisabled } : S.btnPrimary,
+                  disabled: spawnBusy,
+                  onClick: enableSpawn,
+                }, spawnBusy ? '正在开启…' : '开启并重启后使用')))),
 
         toast === '' ? null : h('div', { style: S.toast }, toast))
     }
