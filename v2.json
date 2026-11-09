@@ -1,1 +1,0 @@
-{"verb": "train", "model": "Qwen/Qwen2.5-0.5B-Instruct", "data": "C:\\Users\\86156\\.dsh\\fine-tune\\datasets\\m0-act2", "out": "C:\\Users\\86156\\.dsh\\fine-tune\\outputs\\verify2", "mode": "qlora", "maxSeqLen": 512, "maxSteps": 8, "gradientCheckpointing": true}

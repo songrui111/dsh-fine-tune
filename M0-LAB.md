@@ -26,7 +26,7 @@ python --version
 **独立 venv**，不要污染系统 Python（DSH 的 office 工具链也用系统 Python）。
 
 ```powershell
-cd C:\Users\86156\Documents\deepseek-harness\default-workspace\fine-tune\python
+cd python
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
 
@@ -99,7 +99,7 @@ export const MEASURED = {
 ### 4.1 先试运行（不过 GPU，1 分钟）
 
 ```powershell
-cd C:\Users\86156\Documents\deepseek-harness\default-workspace\fine-tune\python
+cd python
 $data = "$env:USERPROFILE\.dsh\fine-tune\datasets\<id>"
 @{
   model     = "Qwen/Qwen2.5-1.5B-Instruct"
