@@ -48,3 +48,7 @@ stderr.log
 .test-keys/
 dsh-test-*-key
 dsh-test-*-key.pub
+
+# Local backups made while testing; never part of the package.
+*.bak
+*.bak-*
