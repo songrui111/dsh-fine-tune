@@ -976,7 +976,7 @@ window.__ModuleLoader__.load({
         // The button lives in the banner above; pressing 开始训练 with the gate
         // closed points at it rather than opening a second copy of the same ask.
         if (settings.allowSpawn !== true) {
-          say('还没开启训练权限：点上方的「开启训练」按钮，重启 DSH 后即可训练。')
+          say('还没开启训练权限：点上方的「开启训练权限」按钮，重启 DSH 后即可训练。')
           setTab('train')
           return
         }
@@ -1123,7 +1123,7 @@ window.__ModuleLoader__.load({
               disabled: spawnBusy,
               onClick: enableSpawn,
               title: '写入 allowSpawn: true，重启 DSH 后生效',
-            }, spawnBusy ? '正在开启…' : '开启训练'))
+            }, spawnBusy ? '正在开启…' : '开启训练权限'))
           : null,
 
         h('div', { style: S.tabs }, tabs.map(([key, label]) =>
