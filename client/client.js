@@ -98,10 +98,8 @@ window.__ModuleLoader__.load({
       // `flexShrink: 0` + a minimum width keep the label on one line: it sits in a
       // flex row next to the model picker, and without these the three characters
       // of 「数据集」 wrap as soon as the row gets tight.
-      picker: { position: 'relative', flexShrink: 0, minWidth: 148 },
-      pickerButton: { width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, padding: '6px 9px', fontSize: 12.5, font: 'inherit', color: C.text, border: `1px solid ${C.line}`, borderRadius: 8, background: 'transparent', cursor: 'pointer', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
       // The popup floats over whatever is below it (absolute, full z-index) instead
-      // of pushing the layout around ? expanding a dropdown should never reflow the
+      // of pushing the layout around - expanding a dropdown should never reflow the
       // page under the user's cursor.
       // `background` must be an opaque colour: this panel draws on the host's surface,
       // and a token that does not exist (the earlier `C.bg`) leaves the popup
@@ -109,25 +107,10 @@ window.__ModuleLoader__.load({
       // Border and shadow are DSH's own popup treatment (`--dsw-elevation-panel`
       // with `--dsw-alias-border-l3`), so this list separates from the page the way
       // the host's own menus do.
+      picker: { position: 'relative', flexShrink: 0, minWidth: 148 },
+      pickerButton: { width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, padding: '6px 9px', fontSize: 12.5, font: 'inherit', color: C.text, border: `1px solid ${C.line}`, borderRadius: 8, background: 'transparent', cursor: 'pointer', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
       // Progress: a bar that can be read at a glance across the room, because an
       // install this long is something the user walks away from.
-      // A dialog layer: covers the panel so nothing behind it can be clicked by
-      // accident, and dims it so the choice is the only thing to look at.
-      overlay: {
-        position: 'fixed', inset: 0, background: '#0f111566', zIndex: 100,
-        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
-      },
-      dialog: {
-        display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 460, width: '100%',
-        padding: 18, borderRadius: 12, background: C.solid, color: C.solidText,
-        border: `0.5px solid #0000001f`, boxShadow: '0 8px 32px 0 #00000029',
-      },
-      dialogTitle: { fontSize: 14, fontWeight: 600 },
-      dialogCode: {
-        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12,
-        padding: '6px 8px', borderRadius: 6, background: C.soft, color: C.text,
-      },
-      dialogActions: { display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 6 },
       progressBox: { display: 'flex', flexDirection: 'column', gap: 6, padding: '10px 12px', border: `1px solid ${C.line}`, borderRadius: 10 },
       progressHead: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 },
       progressStage: { fontSize: 13, fontWeight: 600, color: C.text },
@@ -967,22 +950,18 @@ window.__ModuleLoader__.load({
       }
 
       /**
-       * The first-run permission dialog.
+       * Turn on the permission that lets training start.
        *
-       * `allowSpawn` defaults to off - a plugin should not be able to start a
-       * process the moment it is installed. But the refusal that follows tells a new
-       * user to go edit a JSON file and restart, which is where they stop. So the
-       * panel asks instead: one dialog that says what the permission is for, and a
-       * button that writes exactly the same setting. The gate is not bypassed - it
-       * is answered, by the person it protects.
+       * The gate defaults off, and the refusal used to send users to edit a JSON
+       * file. Now the banner carries a button: one click, same write, and the panel
+       * says a restart is needed. The host still requires an explicit confirmation
+       * on the route, so this button is the confirmation - not a way around it.
        */
-      const [spawnPrompt, setSpawnPrompt] = React.useState(false)
       const [spawnBusy, setSpawnBusy] = React.useState(false)
       const enableSpawn = async () => {
         setSpawnBusy(true)
         try {
           const result = await postAction({ op: 'env.enableSpawn', confirm: true })
-          setSpawnPrompt(false)
           say(result && result.restartRequired
             ? '已开启训练权限。重启 DSH 后生效，然后回来再点一次「开始训练」。'
             : '已开启训练权限')
@@ -994,10 +973,11 @@ window.__ModuleLoader__.load({
       }
 
       const startTraining = async () => {
-        // Ask before the run is attempted, so the user sees one explained dialog
-        // instead of a 403 and a file path.
+        // The button lives in the banner above; pressing 开始训练 with the gate
+        // closed points at it rather than opening a second copy of the same ask.
         if (settings.allowSpawn !== true) {
-          setSpawnPrompt(true)
+          say('还没开启训练权限：点上方的「开启训练」按钮，重启 DSH 后即可训练。')
+          setTab('train')
           return
         }
         const invalid = validatePlan(plan)
@@ -1136,8 +1116,14 @@ window.__ModuleLoader__.load({
 
         settings.allowSpawn !== true
           ? h('div', { style: { ...S.banner, color: C.warn, borderColor: C.warn } },
-            h('span', null, '「允许启动训练进程」没打开：数据可以准备，训练不能开始。'),
-            h('span', { style: S.note }, '插件配置 → fine-tune → 允许启动训练进程'))
+            h('span', null, '「允许启动训练进程」没打开：数据可以准备，训练不能开始。'
+              + '这项默认关着，因为安装插件不应该等于让它随时启动进程。'),
+            h('button', {
+              style: spawnBusy ? { ...S.btn, ...S.btnDisabled } : S.btn,
+              disabled: spawnBusy,
+              onClick: enableSpawn,
+              title: '写入 allowSpawn: true，重启 DSH 后生效',
+            }, spawnBusy ? '正在开启…' : '开启训练'))
           : null,
 
         h('div', { style: S.tabs }, tabs.map(([key, label]) =>
@@ -1500,34 +1486,6 @@ window.__ModuleLoader__.load({
                   : publish.reason))
           })()
           : null,
-
-        // The permission dialog. Mounted at the root and positioned fixed, so it
-        // covers the panel rather than pushing the layout around - the same rule the
-        // dropdown popups follow.
-        !spawnPrompt
-          ? null
-          : h('div', { style: S.overlay },
-            h('div', { style: S.dialog },
-              h('div', { style: S.dialogTitle }, '开启训练需要一项授权'),
-              h('div', { style: S.note },
-                '训练会在你的电脑上启动一个 Python 进程，并占用显卡。'
-                + '这一项默认关着，是为了让「装上插件」不等于「自己开始跑东西」。'),
-              h('div', { style: S.note },
-                '开启后会写入：'),
-              h('div', { style: S.dialogCode }, 'allowSpawn: true'),
-              h('div', { style: S.note },
-                '写在插件的配置文件里，需要重启 DSH 才生效。随时可以改回 false。'),
-              h('div', { style: S.dialogActions },
-                h('button', {
-                  style: spawnBusy ? { ...S.btn, ...S.btnDisabled } : S.btn,
-                  disabled: spawnBusy,
-                  onClick: () => setSpawnPrompt(false),
-                }, '取消'),
-                h('button', {
-                  style: spawnBusy ? { ...S.btnPrimary, ...S.btnDisabled } : S.btnPrimary,
-                  disabled: spawnBusy,
-                  onClick: enableSpawn,
-                }, spawnBusy ? '正在开启…' : '开启并重启后使用')))),
 
         toast === '' ? null : h('div', { style: S.toast }, toast))
     }

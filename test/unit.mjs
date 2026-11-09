@@ -864,8 +864,8 @@ test('install progress never goes backwards and ends at 100', () => {
 
 test('the panel can only widen its own permission with an explicit confirmation', () => {
   // `allowSpawn` defaults off so that installing a plugin is not the same as letting
-  // it start processes. The panel offers a dialog instead of sending users to edit
-  // JSON - which is fine, but the route behind that dialog must still require the
+  // it start processes. The panel offers a button instead of sending users to edit
+  // JSON - which is fine, but the route behind that button must still require the
   // user's confirmation, or the gate can be opened by any request that reaches it.
   //
   // Checked at the source level: env.enableSpawn must refuse without `confirm`,
