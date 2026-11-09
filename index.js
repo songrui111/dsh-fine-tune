@@ -625,17 +625,29 @@ export async function action({ body, settings, paths, store, backends, gpu, inva
       void runInstall;
       return { body: { ok: true, started: true, installing } };
     }
-    case 'env.enableSpawn': {
-      // Turns on the one setting that lets the plugin start a training process.
+    case 'env.enable': {
+      // Turns on one of the two permissions this plugin keeps off by default.
       //
-      // This exists because the gate refuses a first run with an instruction to go
-      // edit a JSON file and restart, which is where a new user stops. The panel
-      // asks in a dialog instead, and this writes the file - the same edit, made
-      // explicit and explained. It is still the user's decision: the route only
-      // runs after they have confirmed, and it takes `confirm: true` so that no
-      // stray request can widen the plugin's own permissions.
+      // Both are one-way in different ways - `allowSpawn` starts a process that
+      // costs GPU hours, `allowPublish` turns an adapter into something other tools
+      // will load - so both are off until a person says otherwise. The refusal used
+      // to send that person to edit a JSON file, which is where they stop; this
+      // writes the same key after they confirm.
+      //
+      // `confirm: true` is required so no stray request can widen the plugin's own
+      // permissions, and the setting is whitelisted so the route cannot write an
+      // arbitrary key into the file.
+      const SETTINGS = {
+        allowSpawn: '开启训练权限',
+        allowPublish: '开启发布权限',
+      };
+      const setting = String(body?.setting ?? '');
+      const label = SETTINGS[setting];
+      if (label === undefined) {
+        return { status: 400, body: { ok: false, error: `不能开启的设置：${setting}（可选 ${Object.keys(SETTINGS).join(' / ')}）` } };
+      }
       if (body?.confirm !== true) {
-        return { status: 409, body: { ok: false, error: '开启训练权限需要确认：请带 confirm: true' } };
+        return { status: 409, body: { ok: false, error: `${label}需要确认：请带 confirm: true` } };
       }
       const file = configFileFor(root);
       let current = {};
@@ -649,10 +661,10 @@ export async function action({ body, settings, paths, store, backends, gpu, inva
         // would leave the plugin unable to read anything the user set.
         current = {};
       }
-      current.allowSpawn = true;
+      current[setting] = true;
       mkdirSync(root, { recursive: true });
       writeFileSync(file, `${JSON.stringify(current, null, 2)}\n`, 'utf8');
-      return { body: { ok: true, file, restartRequired: true, settings: { ...current } } };
+      return { body: { ok: true, file, setting, restartRequired: true, settings: { ...current } } };
     }
     case 'env.status': {
       const ready = readReady(root);

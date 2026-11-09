@@ -483,6 +483,27 @@ function zstdFrame(bytes, { reserved = false } = {}) {
 
 class SkipError extends Error {}
 
+test('the panel can only widen its own permissions with an explicit confirmation', () => {
+  // Both permissions default off: installing a plugin should not mean letting it
+  // start processes or publish models. The panel offers buttons instead of sending
+  // users to edit JSON - which is fine, but the route behind those buttons must
+  // still require the user's confirmation, and must only accept the two keys it
+  // knows about, or any request could widen the plugin's own permissions.
+  const source = readFileSync(join(process.cwd(), 'index.js'), 'utf8');
+  const start = source.indexOf("case 'env.enable':");
+  assert.ok(start !== -1, 'env.enable must exist');
+  const end = source.indexOf("case 'env.status':", start);
+  const body = source.slice(start, end === -1 ? undefined : end);
+
+  assert.match(body, /body\?\.confirm !== true/, 'refuses without confirm');
+  assert.match(body, /allowSpawn:/, 'allowSpawn is an accepted setting');
+  assert.match(body, /allowPublish:/, 'allowPublish is an accepted setting');
+  assert.match(body, /current\[setting\] = true/, 'writes the requested setting, not a fixed one');
+  assert.match(body, /JSON\.parse/, 'reads the existing file before writing');
+  assert.match(body, /current = \{\}/, 'a corrupt file is replaced, not appended to');
+  assert.match(body, /writeFileSync/, 'writes the config');
+});
+
 let failed = 0;
 let skipped = 0;
 for (const { name, fn } of tests) {
@@ -860,28 +881,6 @@ test('install progress never goes backwards and ends at 100', () => {
     previous = percent;
   }
   assert.equal(previous, 100, 'a finished install must read 100%');
-});
-
-test('the panel can only widen its own permission with an explicit confirmation', () => {
-  // `allowSpawn` defaults off so that installing a plugin is not the same as letting
-  // it start processes. The panel offers a button instead of sending users to edit
-  // JSON - which is fine, but the route behind that button must still require the
-  // user's confirmation, or the gate can be opened by any request that reaches it.
-  //
-  // Checked at the source level: env.enableSpawn must refuse without `confirm`,
-  // must write allowSpawn:true, must preserve whatever else the file held, and must
-  // replace a corrupt file rather than append to one it cannot parse.
-  const source = readFileSync(join(process.cwd(), 'index.js'), 'utf8');
-  const start = source.indexOf("case 'env.enableSpawn':");
-  assert.ok(start !== -1, 'env.enableSpawn must exist');
-  const end = source.indexOf("case 'env.status':", start);
-  const body = source.slice(start, end === -1 ? undefined : end);
-
-  assert.match(body, /body\?\.confirm !== true/, 'refuses without confirm');
-  assert.match(body, /current\.allowSpawn = true/, 'sets allowSpawn');
-  assert.match(body, /JSON\.parse/, 'reads the existing file before writing');
-  assert.match(body, /current = \{\}/, 'a corrupt file is replaced, not appended to');
-  assert.match(body, /writeFileSync/, 'writes the config');
 });
 
 console.log(`\n${tests.length - failed - skipped}/${tests.length} passed${skipped > 0 ? `, ${skipped} skipped` : ''}, ${failed} failed`);

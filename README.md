@@ -77,7 +77,12 @@
 面板顶部会出现一条黄色提示：「允许启动训练进程」没打开。点旁边的「**开启训练权限**」按钮，
 会写入 `allowSpawn: true`，**重启 DSH 后生效**，然后就能训练了。
 
-这项默认关着，是因为安装一个插件不应该等于让它随时启动进程。随时可以把 `config.json` 里的 `allowSpawn` 改回 `false`。
+> **发布到 Ollama 需要另一项授权。**
+> 「评测与发布」页的「发布到 Ollama」区域有一个「**开启发布权限**」按钮，
+> 写入 `allowPublish: true`，同样需要重启 DSH。
+> 两项授权是分开的：训练不等于发布。
+
+两项都默认关着：安装一个插件不应该等于让它随时启动进程或发布模型。随时可以把 `config.json` 里的 `allowSpawn`、`allowPublish` 改回 `false`。
 
 > **不要在 profile 的 `cordis.patch.yml` 里为这个插件写条目。**
 > 它通过自己的 `cordis.patch.yml`（bundle 层）加载，配置写在 `$DSH_HOME/fine-tune/config.json`。

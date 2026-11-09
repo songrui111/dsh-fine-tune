@@ -421,7 +421,7 @@ window.__ModuleLoader__.load({
 
     /** The publish button is open only when there is a green verdict *and* a gguf. */
     function publishState(settings, runDetail) {
-      if (!settings || settings.allowPublish !== true) return { ok: false, reason: '「允许发布模型」没有打开（插件配置 → fine-tune）。' }
+      if (!settings || settings.allowPublish !== true) return { ok: false, reason: '「允许发布模型」还没打开：点下面的「开启发布权限」，重启 DSH 后生效。' }
       if (runDetail === null) return { ok: false, reason: '先在「训练」里选一个任务。' }
       const events = Array.isArray(runDetail.events) ? runDetail.events : []
       const evaluation = [...events].reverse().find((event) => event && event.kind === 'evaluation')
@@ -950,25 +950,26 @@ window.__ModuleLoader__.load({
       }
 
       /**
-       * Turn on the permission that lets training start.
+       * Turn on one of the two permissions the plugin keeps off by default.
        *
-       * The gate defaults off, and the refusal used to send users to edit a JSON
-       * file. Now the banner carries a button: one click, same write, and the panel
-       * says a restart is needed. The host still requires an explicit confirmation
-       * on the route, so this button is the confirmation - not a way around it.
+       * `allowSpawn` lets a training process start; `allowPublish` lets an adapter
+       * become something other tools load. Both refusals used to send the user to
+       * edit a JSON file, which is where they stop - so each blocked panel carries a
+       * button that writes the same key. The host still requires an explicit
+       * confirmation, so the button is the confirmation, not a way around it.
        */
-      const [spawnBusy, setSpawnBusy] = React.useState(false)
-      const enableSpawn = async () => {
-        setSpawnBusy(true)
+      const [permBusy, setPermBusy] = React.useState('')
+      const enablePermission = async (setting, label, next) => {
+        setPermBusy(setting)
         try {
-          const result = await postAction({ op: 'env.enableSpawn', confirm: true })
+          const result = await postAction({ op: 'env.enable', setting, confirm: true })
           say(result && result.restartRequired
-            ? '已开启训练权限。重启 DSH 后生效，然后回来再点一次「开始训练」。'
-            : '已开启训练权限')
+            ? `已${label}。重启 DSH 后生效，然后回来${next}。`
+            : `已${label}`)
         } catch (err) {
           say(`开启失败：${err.message}`)
         } finally {
-          setSpawnBusy(false)
+          setPermBusy('')
         }
       }
 
@@ -1119,11 +1120,11 @@ window.__ModuleLoader__.load({
             h('span', null, '「允许启动训练进程」没打开：数据可以准备，训练不能开始。'
               + '这项默认关着，因为安装插件不应该等于让它随时启动进程。'),
             h('button', {
-              style: spawnBusy ? { ...S.btn, ...S.btnDisabled } : S.btn,
-              disabled: spawnBusy,
-              onClick: enableSpawn,
+              style: permBusy === 'allowSpawn' ? { ...S.btn, ...S.btnDisabled } : S.btn,
+              disabled: permBusy !== '',
+              onClick: () => enablePermission('allowSpawn', '开启了训练权限', '再点一次「开始训练」'),
               title: '写入 allowSpawn: true，重启 DSH 后生效',
-            }, spawnBusy ? '正在开启…' : '开启训练权限'))
+            }, permBusy === 'allowSpawn' ? '正在开启…' : '开启训练权限'))
           : null,
 
         h('div', { style: S.tabs }, tabs.map(([key, label]) =>
@@ -1480,10 +1481,23 @@ window.__ModuleLoader__.load({
                 disabled: busy !== '' || !publish.ok,
                 onClick: preparePublish,
               }, '发布'),
-              h('div', { style: S.note },
-                publish.ok
-                  ? '评测通过。点「发布」会得到一条 ollama create 命令，面板不替你在后台写任何东西。'
-                  : publish.reason))
+              // `Section` takes exactly (title, right, children) - a fourth argument
+              // is silently dropped, so the note and the button share one column.
+              h('div', { style: { display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-start' } },
+                h('div', { style: S.note },
+                  publish.ok
+                    ? '评测通过。点「发布」会得到一条 ollama create 命令，面板不替你在后台写任何东西。'
+                    : publish.reason),
+                // The refusal names the setting, so the button that answers it sits
+                // here rather than sending the user looking for a config file.
+                settings.allowPublish !== true
+                  ? h('button', {
+                    style: permBusy === 'allowPublish' ? { ...S.btn, ...S.btnDisabled } : S.btn,
+                    disabled: permBusy !== '',
+                    onClick: () => enablePermission('allowPublish', '开启了发布权限', '再点一次「发布」'),
+                    title: '写入 allowPublish: true，重启 DSH 后生效',
+                  }, permBusy === 'allowPublish' ? '正在开启…' : '开启发布权限')
+                  : null))
           })()
           : null,
 
