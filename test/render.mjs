@@ -159,3 +159,11 @@ for (const allowSpawn of [false, true]) {
 console.log(`rendered ${rendered} times across allowSpawn off/on and all three tabs`);
 console.log('hooks recorded during render:', [...new Set(hookLog)].join(', '));
 console.log('panel render: OK');
+
+// The picker lives on the training tab, which this harness never renders (the panel
+// always starts on `data`), so its presence is checked at the source level. What the
+// renders above prove is that neither tab throws.
+assert.ok(source.includes("'\u672c\u5730\u6a21\u578b'"), 'the panel must offer a ???? button');
+assert.ok(source.includes("op: 'model.scan'"), 'the panel must scan via model.scan');
+assert.ok(source.includes("op: 'env.enable'"), 'the panel must use env.enable');
+console.log('local model picker: present in source');

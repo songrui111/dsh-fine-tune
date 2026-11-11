@@ -958,6 +958,36 @@ window.__ModuleLoader__.load({
        * button that writes the same key. The host still requires an explicit
        * confirmation, so the button is the confirmation, not a way around it.
        */
+      /**
+       * Local model picker.
+       *
+       * A hub id is fetched by transformers; a model already on disk is loaded in
+       * place. The panel cannot know what is on the user's disk, so it asks for a
+       * folder and lists what looks like a model there - `config.json` plus at least
+       * one weight file, which is the same test the host applies before a run.
+       */
+      const [localOpen, setLocalOpen] = React.useState(false)
+      const [localDir, setLocalDir] = React.useState('')
+      const [localModels, setLocalModels] = React.useState(null)
+      const [localBusy, setLocalBusy] = React.useState(false)
+      const scanLocalModels = async () => {
+        const dir = localDir.trim()
+        if (dir === '') {
+          say('先填一个目录，例如 D:/models')
+          return
+        }
+        setLocalBusy(true)
+        try {
+          const result = await postAction({ op: 'model.scan', dir })
+          setLocalModels(Array.isArray(result && result.models) ? result.models : [])
+        } catch (err) {
+          say(`扫描失败：${err.message}`)
+          setLocalModels([])
+        } finally {
+          setLocalBusy(false)
+        }
+      }
+
       const [permBusy, setPermBusy] = React.useState('')
       const enablePermission = async (setting, label, next) => {
         setPermBusy(setting)
@@ -1225,7 +1255,48 @@ window.__ModuleLoader__.load({
                       h('span', null, dataset.id))
                   }) }),
                 h('select', { style: { ...S.input, minWidth: 0, flex: '1 1 0' }, value: plan.modelId, onChange: (event) => patchPlan({ modelId: event.target.value }) },
-                  MODELS.map(([id, label]) => h('option', { key: id, value: id }, label)))),
+                  MODELS.map(([id, label]) => h('option', { key: id, value: id }, label)),
+                  // A local path is not in MODELS. Without this option the select
+                  // would show its first entry while plan.modelId pointed elsewhere.
+                  MODELS.some(([id]) => id === plan.modelId)
+                    ? null
+                    : h('option', { value: plan.modelId }, `本地：${plan.modelId.split('/').pop()}`)),
+                h('button', {
+                  style: S.btn,
+                  onClick: () => setLocalOpen(!localOpen),
+                  title: '用一个已经下载到本地的模型目录',
+                }, localOpen ? '收起' : '本地模型')),
+
+              localOpen
+                ? h('div', { style: { ...S.section, padding: 10, display: 'flex', flexDirection: 'column', gap: 6 } },
+                  h('div', { style: S.note }, '目录里需要有 config.json 和权重文件（*.safetensors 或 *.bin）。HuggingFace 缓存的 snapshots 子目录也可以直接选。'),
+                  h('div', { style: S.rowInput },
+                    h('input', {
+                      style: { ...S.input, flex: '1 1 0', minWidth: 0 },
+                      value: localDir,
+                      placeholder: 'D:/models 或 C:/Users/.../snapshots',
+                      onChange: (event) => setLocalDir(event.target.value),
+                      onKeyDown: (event) => { if (event.key === 'Enter') scanLocalModels() },
+                    }),
+                    h('button', {
+                      style: localBusy ? { ...S.btnPrimary, ...S.btnDisabled } : S.btnPrimary,
+                      disabled: localBusy,
+                      onClick: scanLocalModels,
+                    }, localBusy ? '扫描中…' : '扫描')),
+                  localModels === null
+                    ? null
+                    : (localModels.length === 0
+                      ? h('div', { style: S.note }, '这个目录下没找到模型（需要 config.json + 权重文件）')
+                      : h('div', { style: { display: 'flex', flexDirection: 'column', gap: 2 } },
+                        localModels.map((m) => h('div', {
+                          key: m.path,
+                          style: { ...S.row, ...S.clickable },
+                          onClick: () => { patchPlan({ modelId: m.path }); setLocalOpen(false) },
+                          title: m.path,
+                        },
+                          h('span', { style: S.name }, m.name),
+                          h('span', { style: S.num }, `${m.gib} GiB`))))))
+                  : null,
 
               // ---- mode: the one choice that decides whether 6 GB is enough
               h('div', { style: S.modeRow }, Object.keys(MODE_INFO).map((key) => h('button', {

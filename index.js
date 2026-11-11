@@ -14,7 +14,7 @@
  * a GPU process and `publish.prepare` is the door to Ollama.
  */
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
@@ -530,6 +530,60 @@ function loadDatasetManifest(datasetsRoot, id) {
   }
 }
 
+/** True when a modelId names a directory rather than a hub repo. */
+function looksLikeLocalModel(modelId) {
+  return /^[A-Za-z]:\//.test(modelId)
+    || modelId.startsWith('/')
+    || modelId.startsWith('./')
+    || modelId.startsWith('../');
+}
+
+/**
+ * A directory is usable as a model only when it has a config and at least one
+ * weight file. Checking the shape here turns a confusing transformers traceback
+ * into one sentence naming what is missing.
+ */
+function checkLocalModel(dir) {
+  if (!existsSync(dir)) return { ok: false, error: `本地模型目录不存在：${dir}` };
+  if (!existsSync(join(dir, 'config.json'))) {
+    return { ok: false, error: `这个目录不像模型：缺少 config.json（${dir}）` };
+  }
+  let files = [];
+  try { files = readdirSync(dir); } catch (error) {
+    return { ok: false, error: `无法读取目录：${error?.message ?? error}` };
+  }
+  if (!files.some((f) => /\.(safetensors|bin)$/i.test(f))) {
+    return { ok: false, error: `这个目录不像模型：没有权重文件（*.safetensors 或 *.bin）` };
+  }
+  return { ok: true };
+}
+
+/** Describe one model directory, or null when it does not look like one. */
+function describeModelDir(dir) {
+  if (checkLocalModel(dir).ok !== true) return null;
+  let gib = 0;
+  try {
+    for (const name of readdirSync(dir)) {
+      if (!/\.(safetensors|bin)$/i.test(name)) continue;
+      try { gib += statSync(join(dir, name)).size; } catch { /* a broken link is not fatal */ }
+    }
+  } catch { /* size is a nicety, not a requirement */ }
+  // Name it the way a human would. A HuggingFace cache snapshot lives at
+  // `<hub>/models--owner--name/snapshots/<hash>`, and the hash says nothing, so
+  // walk up to the repo folder and read owner/name from it.
+  let label = basename(dir);
+  try {
+    const cfg = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8'));
+    if (typeof cfg._name_or_path === 'string' && cfg._name_or_path !== '') {
+      label = cfg._name_or_path;
+    } else if (/^[0-9a-f]{16,}$/i.test(label)) {
+      const fromCache = /^models--(.+)--(.+)$/.exec(basename(dirname(dirname(dir))));
+      if (fromCache !== null) label = `${fromCache[1]}/${fromCache[2]}`;
+    }
+  } catch { /* fall back to the folder name */ }
+  return { path: dir.replace(/\\/g, '/'), name: label, gib: Math.round((gib / 1024 ** 3) * 10) / 10 };
+}
+
 export async function action({ body, settings, paths, store, backends, gpu, invalidateGpu }) {
   const op = String(body?.op ?? '');
   const root = paths.root;
@@ -681,6 +735,28 @@ export async function action({ body, settings, paths, store, backends, gpu, inva
         },
       };
     }
+    case 'model.scan': {
+      // Lists the model folders under a directory so the panel can offer them by
+      // name instead of making the user type a path from memory. It looks at the
+      // directory itself first, then one level down - the two layouts people
+      // actually use (`D:/models/qwen` or `D:/models/qwen/base`).
+      const dir = String(body?.dir ?? '').trim();
+      if (dir === '') return { status: 400, body: { ok: false, error: '\u9700\u8981\u4e00\u4e2a\u76ee\u5f55\uff08\u5982 D:/models\uff09' } };
+      if (!existsSync(dir)) return { status: 404, body: { ok: false, error: `\u76ee\u5f55\u4e0d\u5b58\u5728\uff1a${dir}` } };
+      const models = [];
+      const self = describeModelDir(dir);
+      if (self !== null) models.push(self);
+      try {
+        for (const entry of readdirSync(dir, { withFileTypes: true })) {
+          if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+          const found = describeModelDir(join(dir, entry.name));
+          if (found !== null) models.push(found);
+        }
+      } catch (error) {
+        return { status: 400, body: { ok: false, error: `\u65e0\u6cd5\u8bfb\u53d6\u76ee\u5f55\uff1a${error?.message ?? error}` } };
+      }
+      return { body: { ok: true, dir: dir.replace(/\\\\/g, '/'), models } };
+    }
     case 'source.create': {
       const validated = validateSourceInput(body?.source);
       if (validated.error !== undefined) return { status: 400, body: { ok: false, error: validated.error } };
@@ -755,6 +831,13 @@ export async function action({ body, settings, paths, store, backends, gpu, inva
       const validated = validateTrainingPlan(body);
       if (validated.ok !== true) return { status: 400, body: { ok: false, error: validated.error } };
       const plan = validated.value;
+      // A hub id is fetched by transformers itself; a local path is ours to check.
+      // "directory not found" after the worker has already spent a minute loading
+      // torch is a worse message than one that arrives before anything starts.
+      if (looksLikeLocalModel(plan.modelId)) {
+        const checked = checkLocalModel(plan.modelId);
+        if (checked.ok !== true) return { status: 400, body: { ok: false, error: checked.error } };
+      }
       const backend = body?.backend === 'ssh' ? 'ssh' : 'local';
       const gpuInfo = backend === 'local' ? await gpu() : null;
       const estimate = estimateMemory({ ...plan, modelId: plan.modelId, gpuGiB: gpuInfo?.gpus?.[0]?.totalGiB });
