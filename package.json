@@ -1,6 +1,6 @@
 {
   "name": "dsh-fine-tune",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Local LoRA / QLoRA fine-tuning for DeepSeek Harness: import JSONL, train on your own GPU (or a remote SSH host), evaluate, and export an adapter. One-click environment install; Windows + NVIDIA verified. 本地微调插件：数据集→训练→评测，支持本机与远程 GPU。",
   "type": "module",
   "main": "index.js",
